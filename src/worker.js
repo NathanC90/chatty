@@ -12,7 +12,9 @@ const MAX_UPLOAD = 1.9 * 1024 * 1024; // one SQLite row holds at most 2 MB
 // The smallest per-object storage limit Cloudflare's free-plan docs mention. Overridable for tests.
 const STORAGE_LIMIT = 1024 ** 3;
 const PRESENCE = ["offline", "idle", "online"]; // worst to best
-const STALE_MS = 70_000; // the page pings every 25 s; a socket silent this long is treated as gone
+// The page pings every 25 s, but browsers slow timers in background tabs to about once a minute,
+// so a socket only counts as gone after 3 silent minutes. Overridable for tests.
+const STALE_MS = 180_000;
 const EMOJI = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 const TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp", "audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg"];
 
@@ -43,7 +45,7 @@ export class Chat extends DurableObject {
         super(ctx, env);
         this.sql = ctx.storage.sql;
         this.limit = Number(env.STORAGE_LIMIT) || STORAGE_LIMIT;
-        this.sentPresence = new Map(); // "convo:uid" -> last status told to the partner
+        this.staleMs = Number(env.STALE_MS) || STALE_MS;
         this.sql.exec(`
             CREATE TABLE IF NOT EXISTS users (uid TEXT PRIMARY KEY, convo TEXT, waiting TEXT);
             CREATE TABLE IF NOT EXISTS convos (id TEXT PRIMARY KEY, key TEXT, a TEXT, b TEXT, delivered_a INTEGER DEFAULT 0, delivered_b INTEGER DEFAULT 0);
@@ -146,23 +148,28 @@ export class Chat extends DurableObject {
     presenceOf(uid) {
         let best = 0;
         for (const ws of this.ctx.getWebSockets(uid)) {
-            const { state, since = 0 } = ws.deserializeAttachment() || {};
+            const { state, since = 0, lastSeen = 0 } = ws.deserializeAttachment() || {};
             const lastPing = this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0;
-            if (ws.readyState !== WebSocket.OPEN || Date.now() - Math.max(lastPing, since) > STALE_MS) continue;
+            if (ws.readyState !== WebSocket.OPEN || Date.now() - Math.max(lastPing, since, lastSeen) > this.staleMs) continue;
             best = Math.max(best, PRESENCE.indexOf(state));
         }
         return PRESENCE[best];
     }
 
-    // Tells the other person in uid's chat when uid's status has changed.
+    // Tells the other person in uid's chat uid's current status. Always sent, never deduplicated:
+    // the other page may have reconnected and seen a different status in its snapshot since.
     sendPresence(uid) {
         const c = this.convo(this.user(uid).convo);
         const partner = c && this.partnerOf(c, uid);
-        if (!partner || this.user(partner).convo !== c.id) return;
-        const state = this.presenceOf(uid);
-        if (this.sentPresence.get(`${c.id}:${uid}`) === state) return;
-        this.sentPresence.set(`${c.id}:${uid}`, state);
-        this.emit(partner, { type: "presence", state });
+        if (partner && this.user(partner).convo === c.id) this.emit(partner, { type: "presence", state: this.presenceOf(uid) });
+    }
+
+    // Sending, typing or reacting proves someone is here, whatever their page last reported.
+    touch(uid) {
+        for (const ws of this.ctx.getWebSockets(uid)) {
+            ws.serializeAttachment({ ...ws.deserializeAttachment(), state: "online", lastSeen: Date.now() });
+        }
+        this.sendPresence(uid);
     }
 
     // Once a minute while anyone is connected: catches phones that lost signal without closing the socket.
@@ -242,6 +249,7 @@ export class Chat extends DurableObject {
 
         if (req.method !== "POST") return empty(404);
         const isDuplicate = (cid) => !!this.row("SELECT 1 FROM messages WHERE convo = ? AND sender = ? AND cid = ?", c.id, uid, cid);
+        if (["/api/send", "/api/upload", "/api/typing", "/api/react"].includes(path)) this.touch(uid);
 
         if (path === "/api/upload") {
             const type = (req.headers.get("Content-Type") || "").split(";")[0].trim();
@@ -312,7 +320,7 @@ export class Chat extends DurableObject {
     webSocketMessage(ws, msg) {
         const state = /^presence:(online|idle|offline)$/.exec(msg)?.[1];
         if (!state) return;
-        ws.serializeAttachment({ ...ws.deserializeAttachment(), state });
+        ws.serializeAttachment({ ...ws.deserializeAttachment(), state, lastSeen: Date.now() }); // a message also proves it's alive
         this.sendPresence(this.ctx.getTags(ws)[0]);
     }
 

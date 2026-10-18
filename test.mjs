@@ -18,10 +18,11 @@ const PORT = await new Promise((resolve) => {
 const base = `http://127.0.0.1:${PORT}`;
 let proc;
 const STORAGE_LIMIT = 3_000_000; // tiny, so the test can fill it
+const STALE_MS = 3000; // a socket silent this long counts as gone (3 minutes in real use)
 
 async function startServer() {
     const bin = new URL("node_modules/.bin/wrangler", import.meta.url).pathname;
-    proc = spawn(bin, ["dev", "--ip", "127.0.0.1", "--port", PORT, "--persist-to", DATA_DIR, "--var", `STORAGE_LIMIT:${STORAGE_LIMIT}`], {
+    proc = spawn(bin, ["dev", "--ip", "127.0.0.1", "--port", PORT, "--persist-to", DATA_DIR, "--var", `STORAGE_LIMIT:${STORAGE_LIMIT}`, "--var", `STALE_MS:${STALE_MS}`], {
         cwd: new URL(".", import.meta.url).pathname,
         env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
         detached: true, // own process group, so stopping it also stops workerd
@@ -150,6 +151,21 @@ try {
     assert.equal((await a.next("presence")).state, "offline");
     await b.listen(p3.msg.id);
     assert.equal((await a.next("presence")).state, "online");
+
+    // A socket that's been quiet too long counts as gone (this test client never pings)...
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const presenceBecomes = async (u, state) => {
+        for (;;) if ((await u.next("presence")).state === state) return;
+    };
+    await sleep(STALE_MS + 500);
+    await a.listen(p3.msg.id);
+    assert.equal((await a.next()).presence, "offline");
+    // ...but anything b sends brings it straight back, even though a's page saw 已離線 in between:
+    b.send("presence:online"); // what a page sends when you return to it
+    await presenceBecomes(a, "online");
+    await sleep(STALE_MS + 500);
+    await b.post("/api/typing"); // typing, sending or reacting
+    await presenceBecomes(a, "online");
 
     // Server goes down. b keeps writing; the message is only accepted once it's back.
     const lastSeenByA = p3.msg.id;

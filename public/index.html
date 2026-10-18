@@ -21,6 +21,7 @@
     body { font: 16px/1.45 system-ui, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif; background: var(--bg); color: var(--text); }
     button, input, textarea { font: inherit; color: inherit; }
     button { cursor: pointer; border: 0; background: none; }
+    a, button { -webkit-tap-highlight-color: transparent; }
     [hidden] { display: none !important; }
 
     .app { height: 100dvh; max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; background: var(--surface); }
@@ -81,6 +82,13 @@
     .expired { font-style: italic; opacity: 0.75; }
     .meter { width: 100%; height: 6px; margin-top: 8px; border-radius: 3px; background: var(--them); overflow: hidden; }
     .meter i { display: block; width: 0; height: 100%; background: var(--accent); }
+    /* Image viewer: full screen over the chat */
+    dialog.viewer { width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 0; border-radius: 0; background: rgb(0 0 0 / 0.96); box-shadow: none; }
+    dialog.viewer[open] { display: grid; place-items: center; }
+    dialog.viewer::backdrop { background: transparent; }
+    .viewer img { max-width: 100vw; max-height: 100dvh; object-fit: contain; }
+    .viewer-bar { position: fixed; top: max(8px, env(safe-area-inset-top)); right: 8px; display: flex; gap: 4px; }
+    .viewer .icon, .viewer .icon:hover { color: #fff; background: rgb(255 255 255 / 0.12); }
     .picker { position: fixed; z-index: 10; display: flex; align-items: center; padding: 4px; border: 1px solid var(--line); border-radius: 26px; background: var(--surface); box-shadow: 0 8px 30px rgb(0 0 0 / 0.2); }
     .picker #emojis { display: flex; }
     .picker #emojis button { width: 42px; height: 42px; border-radius: 50%; font-size: 1.45rem; transition: transform 0.12s; }
@@ -174,6 +182,14 @@
         </div>
     </section>
 </div>
+
+<dialog class="viewer" id="viewer" aria-label="圖片">
+    <img id="viewerImg" alt="圖片">
+    <div class="viewer-bar">
+        <a class="icon" id="viewerSave" download aria-label="下載圖片" title="下載"><svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg></a>
+        <button type="button" class="icon" id="viewerClose" aria-label="關閉" title="關閉（Esc）"><svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+    </div>
+</dialog>
 
 <div class="picker" id="picker" role="menu" hidden>
     <div id="emojis"></div>
@@ -276,7 +292,10 @@
     const reconnectIfNeeded = checkAlive;
     addEventListener("online", reconnectIfNeeded);
     document.addEventListener("visibilitychange", () => {
-        if (!document.hidden) lastActive = Date.now();
+        if (!document.hidden) {
+            lastActive = Date.now();
+            reported = null; // always re-announce on return, even if nothing seems to have changed
+        }
         reportPresence(); // a phone going to the home screen shows as 已離線 right away
         if (document.hidden) return;
         unread = 0;
@@ -466,7 +485,11 @@
             b.classList.add("media");
             const a = el("a");
             a.href = m.url || m.local;
-            a.target = "_blank";
+            a.target = "_blank"; // only for ctrl/middle-click; a plain tap opens the viewer
+            a.onclick = (e) => {
+                e.preventDefault();
+                openViewer(a.href);
+            };
             const img = el("img");
             img.src = m.url || m.local;
             img.alt = "圖片";
@@ -547,6 +570,22 @@
         if (convo) show("chat");
         updateStatus();
     }
+
+    // ---------- image viewer ----------
+    // Shown over the chat rather than opening the image as a page: from the home screen there's
+    // no way back from such a page. ✕, Esc, a tap beside the image or the phone's back button close it.
+
+    const viewer = $("viewer");
+    function openViewer(src) {
+        $("viewerImg").src = src;
+        $("viewerSave").href = src;
+        viewer.showModal();
+        history.pushState({ viewer: true }, ""); // so Android's back button closes the viewer, not the chat
+    }
+    viewer.addEventListener("close", () => history.state?.viewer && history.back());
+    addEventListener("popstate", () => viewer.open && viewer.close());
+    viewer.onclick = (e) => e.target === viewer && viewer.close();
+    $("viewerClose").onclick = () => viewer.close();
 
     // ---------- reactions ----------
     // Long-press a message (phone), or hover / right-click it (computer). One per person; tap yours again to remove it.
