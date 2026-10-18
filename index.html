@@ -2,121 +2,599 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f6f6f8">
 <title>Chatty</title>
 <style>
-    :root { --bg: #f4f1ea; --card: #fff; --text: #222; --muted: #888; --me: #ffd76a; --them: #e9e9e9; --accent: #e8a200; }
+    :root {
+        --bg: #f6f6f8; --surface: #fff; --text: #1c1c1e; --muted: #8e8e93; --line: #e5e5ea;
+        --accent: #5b5bf7; --on-accent: #fff; --them: #ececf1; --danger: #e5484d;
+        color-scheme: light dark;
+    }
     @media (prefers-color-scheme: dark) {
-        :root { --bg: #121212; --card: #1e1e1e; --text: #eee; --muted: #999; --me: #7a5b00; --them: #333; }
+        :root { --bg: #0f0f12; --surface: #18181c; --text: #f2f2f5; --muted: #8b8b94; --line: #2a2a31; --them: #26262d; }
     }
     * { box-sizing: border-box; margin: 0; }
-    body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); height: 100dvh; display: flex; justify-content: center; }
-    main { width: 100%; max-width: 600px; display: flex; flex-direction: column; background: var(--card); }
-    header { padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--them); }
-    #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
-    .msg { max-width: 75%; padding: 8px 12px; border-radius: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
-    .me { align-self: flex-end; background: var(--me); }
-    .them { align-self: flex-start; background: var(--them); }
-    .sys { align-self: center; color: var(--muted); font-size: 0.9em; text-align: center; }
-    #typing { min-height: 1.4em; padding: 0 16px; color: var(--muted); font-size: 0.85em; }
-    form { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--them); }
-    input { flex: 1; min-width: 0; padding: 10px; border: 1px solid var(--muted); border-radius: 8px; background: var(--card); color: var(--text); font-size: 1em; }
-    button { padding: 10px 16px; border: 0; border-radius: 8px; background: var(--accent); color: #000; font-size: 1em; cursor: pointer; }
-    button.secondary { background: var(--them); color: var(--text); }
-    button:disabled, input:disabled { opacity: 0.5; cursor: not-allowed; }
+    html, body { height: 100%; }
+    body { font: 16px/1.45 system-ui, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif; background: var(--bg); color: var(--text); }
+    button, input, textarea { font: inherit; color: inherit; }
+    button { cursor: pointer; border: 0; background: none; }
+    [hidden] { display: none !important; }
+
+    .app { height: 100dvh; max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; background: var(--surface); }
+    @media (min-width: 760px) { .app { border-inline: 1px solid var(--line); } }
+
+    /* home + waiting */
+    .center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; padding: 24px 16px; text-align: center; }
+    .logo { font-size: 2.6rem; font-weight: 800; letter-spacing: -0.04em; }
+    .logo span { color: var(--accent); }
+    .sub { color: var(--muted); }
+    .home-form { width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 10px; }
+    .field { width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); outline: none; }
+    .field:focus { border-color: var(--accent); }
+    .primary { padding: 12px 20px; border-radius: 12px; background: var(--accent); color: var(--on-accent); font-weight: 600; }
+    .ghost { padding: 10px 16px; border-radius: 12px; color: var(--muted); }
+    .ghost:hover { background: var(--bg); }
+    .hint { max-width: 340px; font-size: 0.85rem; color: var(--muted); }
+    .spinner { width: 36px; height: 36px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* chat */
+    .top { display: flex; align-items: center; gap: 8px; padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); border-bottom: 1px solid var(--line); }
+    .who { flex: 1; min-width: 0; }
+    .who b { display: block; }
+    .who small { color: var(--muted); display: flex; align-items: center; gap: 6px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #30a46c; }
+    .offline .dot { background: var(--muted); }
+    .icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; color: var(--muted); flex: none; }
+    .icon:hover { background: var(--bg); color: var(--text); }
+    .icon svg { width: 22px; height: 22px; fill: currentColor; }
+    .leave-btn { padding: 8px 14px; border-radius: 10px; color: var(--danger); font-weight: 600; }
+    .leave-btn:hover { background: var(--bg); }
+
+    .banner { padding: 6px; text-align: center; font-size: 0.85rem; background: var(--them); color: var(--muted); }
+    #log { flex: 1; overflow-y: auto; padding: 16px 12px; display: flex; flex-direction: column; gap: 2px; overscroll-behavior: contain; }
+    .row { display: flex; flex-direction: column; max-width: 78%; margin-top: 6px; }
+    .row.me { align-self: flex-end; align-items: flex-end; }
+    .row.them { align-self: flex-start; align-items: flex-start; }
+    .bubble { padding: 8px 13px; border-radius: 18px; background: var(--them); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .me .bubble { background: var(--accent); color: var(--on-accent); }
+    .me .bubble a { color: inherit; }
+    .pending .bubble { opacity: 0.55; }
+    .bubble.media { padding: 4px; background: none; }
+    .bubble img { display: block; max-width: min(260px, 100%); max-height: 320px; border-radius: 14px; border: 1px solid var(--line); }
+    .voice { display: flex; align-items: center; gap: 8px; padding: 2px 4px; color: inherit; }
+    .voice svg { width: 22px; height: 22px; fill: currentColor; }
+    .meta { font-size: 0.72rem; color: var(--muted); padding: 2px 6px; }
+    .sys { align-self: center; margin: 10px 0; font-size: 0.8rem; color: var(--muted); text-align: center; }
+    .more { align-self: center; margin-bottom: 8px; }
+    #typing { min-height: 1.6em; padding: 0 18px; font-size: 0.8rem; color: var(--muted); }
+
+    .composer { display: flex; align-items: flex-end; gap: 4px; padding: 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
+    .composer textarea { flex: 1; resize: none; max-height: 140px; padding: 9px 14px; border: 1px solid var(--line); border-radius: 20px; background: var(--bg); outline: none; }
+    .composer textarea:focus { border-color: var(--accent); }
+    .send { color: var(--accent); }
+    .recording { color: var(--danger) !important; animation: pulse 1s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: 0.4; } }
+    .ended { display: flex; gap: 8px; justify-content: center; align-items: center; flex-wrap: wrap; padding: 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); color: var(--muted); }
+
+    dialog { margin: auto; width: min(360px, calc(100% - 32px)); border: 0; border-radius: 18px; padding: 20px; background: var(--surface); color: var(--text); box-shadow: 0 20px 60px rgb(0 0 0 / 0.3); }
+    dialog::backdrop { background: rgb(0 0 0 / 0.4); }
+    dialog h2 { font-size: 1.1rem; margin-bottom: 8px; }
+    dialog p { color: var(--muted); margin-bottom: 12px; }
+    dialog label { display: flex; gap: 10px; align-items: center; padding: 8px 0; }
+    dialog input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+    .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    .danger { padding: 10px 16px; border-radius: 12px; background: var(--danger); color: #fff; font-weight: 600; }
+    .err { color: var(--danger) !important; }
+    .menu-item { width: 100%; text-align: left; padding: 12px 0; display: flex; justify-content: space-between; align-items: center; }
 </style>
 </head>
 <body>
-<main>
-    <header>Chatty · 匿名一對一陌生人聊天</header>
-    <div id="log" aria-live="polite"><p class="sys">按「開始聊天」，隨機配對一位陌生人。</p></div>
-    <div id="typing"></div>
-    <form id="form">
-        <button type="button" id="action">開始聊天</button>
-        <input id="text" maxlength="1000" autocomplete="off" placeholder="輸入訊息…" aria-label="訊息" disabled>
-        <button id="sendBtn" disabled>送出</button>
+<div class="app" id="app">
+    <section class="center" id="home" hidden>
+        <div class="logo">Chatty<span>.</span></div>
+        <p class="sub">找個人，輕鬆聊天</p>
+        <form class="home-form" id="startForm">
+            <input class="field" id="key" maxlength="50" placeholder="輸入密語來相遇（可留空）" aria-label="密語" autocomplete="off">
+            <button class="primary">開始聊天</button>
+        </form>
+        <p class="hint">輸入相同密語的人會互相配對；留空則隨機配對。也可以分享 <b id="keyLink">/key/密語</b> 連結，打開就直接用那個密語。斷線、重新整理、伺服器重啟都不會中斷你們的對話；要真正結束，請按「離開」。</p>
+    </section>
+
+    <section class="center" id="waiting" hidden>
+        <div class="spinner" aria-hidden="true"></div>
+        <p>正在尋找聊天對象…</p>
+        <p class="sub" id="waitingKey"></p>
+        <button class="ghost" id="cancelWait">取消</button>
+    </section>
+
+    <section id="chat" hidden style="display: contents">
+        <header class="top" id="top">
+            <button class="leave-btn" id="leaveBtn">離開</button>
+            <div class="who"><b>陌生人</b><small><i class="dot"></i><span id="status">已連線</span></small></div>
+            <button class="icon" id="menuBtn" aria-label="設定"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+        </header>
+        <div class="banner" id="offline" hidden>連線中…訊息會在恢復連線後送出</div>
+        <div id="log" aria-live="polite"></div>
+        <div id="typing"></div>
+        <form class="composer" id="composer">
+            <button type="button" class="icon" id="imageBtn" aria-label="傳送圖片"><svg viewBox="0 0 24 24"><path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H5V5h14v14zm-5.04-6.71-2.75 3.54-1.96-2.36L6.5 17h11l-3.54-4.71z"/></svg></button>
+            <button type="button" class="icon" id="micBtn" aria-label="語音訊息"><svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg></button>
+            <textarea id="text" rows="1" maxlength="2000" placeholder="輸入訊息" aria-label="訊息"></textarea>
+            <button class="icon send" aria-label="傳送"><svg viewBox="0 0 24 24"><path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z"/></svg></button>
+            <input type="file" id="file" accept="image/*" hidden>
+        </form>
+        <div class="ended" id="ended" hidden>
+            <span>對方已離開</span>
+            <button class="ghost" id="reportBtn2">回報</button>
+            <button class="primary" id="newChat">離開並找新對象</button>
+        </div>
+    </section>
+</div>
+
+<dialog id="leaveDialog">
+    <form method="dialog">
+        <h2>確定要離開嗎？</h2>
+        <p>離開後這段對話就會結束，無法再找回。</p>
+        <div id="leaveTypeBox" hidden>
+            <p>因為你們聊了很多，若確定要離開，請在下方輸入 <b>leave</b></p>
+            <input class="field" id="leaveType" placeholder="在此輸入 leave" autocomplete="off">
+        </div>
+        <div class="actions">
+            <button class="ghost" value="report" style="margin-right: auto">回報</button>
+            <button class="ghost" value="cancel">取消</button>
+            <button class="danger" value="leave" id="leaveConfirm">離開對話</button>
+        </div>
     </form>
-</main>
+</dialog>
+
+<dialog id="reportDialog">
+    <form method="dialog">
+        <h2>協助我們了解發生的狀況</h2>
+        <p id="reportHint">請至少選擇一個原因</p>
+        <label><input type="checkbox" value="這是廣告訊息"> 這是廣告訊息</label>
+        <label><input type="checkbox" value="令人感到騷擾"> 令人感到騷擾</label>
+        <label><input type="checkbox" value="對方應該用成人模式"> 對方應該用成人模式</label>
+        <input class="field" id="otherReason" placeholder="其他原因" maxlength="200">
+        <p style="margin-top: 12px">將回報這段對話內容並離開。</p>
+        <div class="actions">
+            <button class="ghost" value="cancel">取消</button>
+            <button class="danger" value="report" id="reportConfirm">回報並離開對話</button>
+        </div>
+    </form>
+</dialog>
+
+<dialog id="menuDialog">
+    <form method="dialog">
+        <h2>設定</h2>
+        <label class="menu-item">新訊息音效提醒 <input type="checkbox" id="soundToggle"></label>
+        <button type="button" class="menu-item" id="copyResume">在其他裝置繼續這段對話 <span>複製連結</span></button>
+        <p style="font-size: 0.8rem">拿到這個連結的人就能以你的身分聊天，只給你自己用。</p>
+        <div class="actions"><button class="primary" value="close">完成</button></div>
+    </form>
+</dialog>
+
 <script>
-    const log = document.getElementById("log");
-    const text = document.getElementById("text");
-    const sendBtn = document.getElementById("sendBtn");
-    const action = document.getElementById("action");
-    const typing = document.getElementById("typing");
-    let id = null;
-    let state = "idle"; // idle | waiting | chatting
-    let typingTimer;
-    let lastTypingSent = 0;
+    const $ = (id) => document.getElementById(id);
+    const PENDING_KEY = "chatty.pending";
+    const store = {
+        get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+        set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+    };
 
-    const send = (type, extra) => fetch("send", { method: "POST", body: JSON.stringify({ id, type, ...extra }) });
+    let me = null, convo = null, msgs = [], hasMore = false, delivered = 0, partnerLeft = false;
+    let lastId = 0, deliveredSent = 0, unread = 0, lastTyping = 0, typingTimer, es;
+    // Messages not yet confirmed by the server. Text survives reloads; images/voice live until the tab closes.
+    let pending = store.get(PENDING_KEY, []);
+    const savePending = () => store.set(PENDING_KEY, pending.filter((p) => !p.blob));
+    const newCid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const post = (path, body, headers) => fetch(path, { method: "POST", body: body instanceof Blob ? body : JSON.stringify(body ?? {}), headers });
 
-    function add(cls, content) {
-        const p = document.createElement("p");
-        p.className = cls;
-        p.textContent = content;
-        log.append(p);
-        log.scrollTop = log.scrollHeight;
+    // ---------- connection ----------
+
+    function connect() {
+        es?.close();
+        es = new EventSource(lastId ? `/events?after=${lastId}` : "/events");
+        es.onopen = () => setOnline(true);
+        es.onmessage = (e) => handle(JSON.parse(e.data));
+        es.onerror = () => {
+            setOnline(false);
+            if (es.readyState === EventSource.CLOSED) setTimeout(connect, 2000); // e.g. a proxy answered 502
+        };
+    }
+    const reconnectIfNeeded = () => es?.readyState !== EventSource.OPEN && connect();
+    addEventListener("online", reconnectIfNeeded);
+    document.addEventListener("visibilitychange", () => {
+        if (document.hidden) return;
+        unread = 0;
+        document.title = "Chatty";
+        reconnectIfNeeded();
+    });
+
+    let offlineTimer;
+    function setOnline(online) {
+        $("top").classList.toggle("offline", !online);
+        $("status").textContent = online ? "已連線" : "連線中…";
+        clearTimeout(offlineTimer);
+        if (online) $("offline").hidden = true;
+        else offlineTimer = setTimeout(() => ($("offline").hidden = false), 1000);
     }
 
-    function setState(next) {
-        state = next;
-        const chatting = state === "chatting";
-        text.disabled = sendBtn.disabled = !chatting;
-        action.textContent = chatting ? "離開" : state === "waiting" ? "配對中…" : "開始聊天";
-        action.className = chatting ? "secondary" : "";
-        action.disabled = state === "waiting";
-        if (chatting) text.focus();
-        typing.textContent = "";
-    }
-
-    function find() {
-        log.replaceChildren();
-        send("find");
-    }
-
-    const events = new EventSource("events");
-    events.onmessage = (e) => {
-        const data = JSON.parse(e.data);
-        if (data.type === "hello") id = data.id;
-        else if (data.type === "waiting") { setState("waiting"); add("sys", "正在尋找陌生人…"); }
-        else if (data.type === "matched") { setState("chatting"); add("sys", "已配對成功！打聲招呼吧。"); }
-        else if (data.type === "left") { setState("idle"); add("sys", "對方已離開聊天。"); }
-        else if (data.type === "msg") { typing.textContent = ""; add("msg them", data.text); }
-        else if (data.type === "typing") {
-            typing.textContent = "對方正在輸入…";
+    function handle(d) {
+        if (d.type === "state") {
+            me = d.me;
+            if (d.state !== "chat") {
+                convo = null;
+                msgs = [];
+                lastId = 0;
+                pending = [];
+                savePending();
+                $("waitingKey").textContent = d.key ? `密語：${d.key}` : "";
+                return show(d.state === "waiting" ? "waiting" : "home");
+            }
+            if (d.reset || d.convo !== convo) {
+                msgs = [];
+                pending = pending.filter((p) => p.convo === d.convo);
+                savePending();
+            }
+            convo = d.convo;
+            if (d.reset) hasMore = d.hasMore;
+            delivered = d.delivered;
+            partnerLeft = d.partnerLeft;
+            show("chat");
+            merge(d.messages, true);
+            flushPending();
+        } else if (d.type === "msg" && convo) {
+            const m = d.msg;
+            if (!m.mine) {
+                $("typing").textContent = "";
+                if (m.type === "leave") partnerLeft = true;
+                else notify();
+            }
+            merge([m]);
+        } else if (d.type === "typing" && convo) {
+            $("typing").textContent = "對方正在輸入…";
             clearTimeout(typingTimer);
-            typingTimer = setTimeout(() => (typing.textContent = ""), 3000);
+            typingTimer = setTimeout(() => ($("typing").textContent = ""), 6000);
+        } else if (d.type === "delivered") {
+            delivered = Math.max(delivered, d.id);
+            render();
         }
-    };
-    events.onerror = () => {
-        if (state !== "idle") add("sys", "連線中斷，正在重新連線…");
-        setState("idle");
-    };
+    }
 
-    action.onclick = () => {
-        if (state === "idle" && id) return find();
-        if (state === "chatting" && confirm("確定要離開這段聊天嗎？")) {
-            send("leave");
-            setState("idle");
-            add("sys", "你已離開聊天。");
+    function merge(list, toBottom) {
+        const ids = new Set(msgs.map((m) => m.id));
+        for (const m of list) {
+            if (ids.has(m.id)) continue;
+            msgs.push(m);
+            if (m.mine) pending = pending.filter((p) => p.cid !== m.cid);
         }
-    };
-
-    text.oninput = () => {
-        if (Date.now() - lastTypingSent > 1500) {
-            lastTypingSent = Date.now();
-            send("typing");
+        msgs.sort((a, b) => a.id - b.id);
+        lastId = Math.max(lastId, ...msgs.map((m) => m.id));
+        savePending();
+        render(toBottom);
+        // 已送達: tell the other side their messages reached this device.
+        const latest = Math.max(0, ...msgs.filter((m) => !m.mine).map((m) => m.id));
+        if (latest > deliveredSent) {
+            deliveredSent = latest;
+            post("/api/delivered", { id: latest }).catch(() => (deliveredSent = 0));
         }
-    };
+    }
 
-    document.getElementById("form").onsubmit = (e) => {
+    let flushing = false;
+    async function flushPending() {
+        if (flushing) return;
+        flushing = true;
+        try {
+            for (const p of pending.filter((p) => p.convo === convo)) {
+                const res = p.blob
+                    ? await post(`/api/upload?cid=${p.cid}&duration=${p.duration || 0}`, p.blob, { "Content-Type": p.blob.type })
+                    : await post("/api/send", { cid: p.cid, text: p.text });
+                if (res.status >= 400 && res.status < 500) {
+                    pending = pending.filter((x) => x !== p); // rejected for good (e.g. chat ended)
+                    savePending();
+                    render();
+                }
+            }
+        } catch {
+            setTimeout(flushPending, 2000); // offline: try again shortly (and on reconnect)
+        } finally {
+            flushing = false;
+        }
+    }
+
+    function queue(item) {
+        pending.push({ cid: newCid(), convo, time: Date.now(), ...item });
+        savePending();
+        render(true);
+        flushPending();
+    }
+
+    // ---------- views ----------
+
+    function show(name) {
+        $("home").hidden = name !== "home";
+        $("waiting").hidden = name !== "waiting";
+        $("chat").hidden = name !== "chat";
+        if (name === "chat") {
+            $("composer").hidden = partnerLeft;
+            $("ended").hidden = !partnerLeft;
+        }
+    }
+
+    const time = (t) => new Date(t).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false });
+    function day(t) {
+        const d = new Date(t), today = new Date(), diff = Math.round((new Date(today.toDateString()) - new Date(d.toDateString())) / 864e5);
+        const label = `${d.getFullYear() !== today.getFullYear() ? `${d.getFullYear()}年` : ""}${d.getMonth() + 1}月${d.getDate()}日`;
+        return diff === 0 ? `今日 (${label})` : diff === 1 ? `昨日 (${label})` : label;
+    }
+
+    function el(tag, cls, text) {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (text != null) e.textContent = text;
+        return e;
+    }
+
+    function linkify(text) {
+        const frag = document.createDocumentFragment();
+        text.split(/(https?:\/\/[^\s<>"]+)/g).forEach((part, i) => {
+            if (i % 2) {
+                const a = el("a", null, part);
+                a.href = part;
+                a.target = "_blank";
+                a.rel = "noopener noreferrer";
+                frag.append(a);
+            } else frag.append(part);
+        });
+        return frag;
+    }
+
+    const audioCache = {};
+    async function playVoice(url, btn) {
+        btn.classList.add("recording");
+        try {
+            // Fetched as a blob so playback doesn't depend on the server supporting Range requests (iOS).
+            audioCache[url] ??= URL.createObjectURL(await (await fetch(url)).blob());
+            const audio = new Audio(audioCache[url]);
+            audio.onended = audio.onerror = () => btn.classList.remove("recording");
+            await audio.play();
+        } catch {
+            btn.classList.remove("recording");
+        }
+    }
+
+    function content(m) {
+        const b = el("div", "bubble");
+        if (m.type === "image") {
+            b.classList.add("media");
+            const a = el("a");
+            a.href = m.url || m.local;
+            a.target = "_blank";
+            const img = el("img");
+            img.src = m.url || m.local;
+            img.alt = "圖片";
+            img.loading = "lazy";
+            img.onload = () => nearBottom() && scrollDown();
+            a.append(img);
+            b.append(a);
+        } else if (m.type === "audio") {
+            const btn = el("button", "voice");
+            btn.type = "button";
+            btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
+            btn.append(`語音 ${Math.round(m.duration || 0)} 秒`);
+            if (m.url) btn.onclick = () => playVoice(m.url, btn);
+            b.append(btn);
+        } else b.append(linkify(m.text));
+        return b;
+    }
+
+    const log = $("log");
+    const nearBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 120;
+    const scrollDown = () => (log.scrollTop = log.scrollHeight);
+
+    function render(toBottom) {
+        const stick = toBottom || nearBottom();
+        const out = [];
+        if (hasMore) {
+            const more = el("button", "ghost more", "載入更早的訊息");
+            more.onclick = loadMore;
+            out.push(more);
+        }
+        if (!msgs.length && !hasMore) out.push(el("p", "sys", "已配對成功！跟對方打聲招呼吧。"));
+        let prevDay;
+        const lastMine = msgs.findLast((m) => m.mine && m.type !== "leave");
+        for (const m of msgs) {
+            const d = day(m.time);
+            if (d !== prevDay) out.push(el("p", "sys", d));
+            prevDay = d;
+            if (m.type === "leave") {
+                out.push(el("p", "sys", m.mine ? "你已離開聊天" : "對方已離開聊天"));
+                continue;
+            }
+            const row = el("div", `row ${m.mine ? "me" : "them"}`);
+            const meta = [time(m.time)];
+            if (!m.mine && m.mobile) meta.unshift("行動裝置");
+            if (m === lastMine && !pending.some((p) => p.convo === convo)) meta.push(delivered >= m.id ? "已送達" : "已送出");
+            row.append(content(m), el("div", "meta", meta.join(" · ")));
+            out.push(row);
+        }
+        for (const p of pending.filter((p) => p.convo === convo)) {
+            const row = el("div", "row me pending");
+            row.append(content(p), el("div", "meta", "傳送中…"));
+            out.push(row);
+        }
+        const fromBottom = log.scrollHeight - log.scrollTop;
+        log.replaceChildren(...out);
+        if (stick) scrollDown();
+        else log.scrollTop = log.scrollHeight - fromBottom; // keep position when older messages are added
+        if (convo) show("chat");
+    }
+
+    async function loadMore() {
+        const res = await fetch(`/api/history?before=${msgs[0]?.id ?? lastId + 1}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        hasMore = data.hasMore;
+        merge(data.messages);
+    }
+
+    function notify() {
+        if (!document.hidden && document.hasFocus()) return;
+        if (document.hidden) document.title = `(${++unread}) Chatty`;
+        if (store.get("chatty.sound", true)) ding();
+    }
+
+    let audioCtx;
+    function ding() {
+        try {
+            audioCtx ??= new AudioContext();
+            const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime;
+            o.frequency.value = 880;
+            g.gain.setValueAtTime(0.12, t);
+            g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+            o.connect(g).connect(audioCtx.destination);
+            o.start(t);
+            o.stop(t + 0.35);
+        } catch {}
+    }
+
+    // ---------- actions ----------
+
+    const pathKey = location.pathname.startsWith("/key/") ? decodeURIComponent(location.pathname.slice(5)) : null;
+    $("key").value = pathKey ?? store.get("chatty.key", "");
+    $("keyLink").textContent = `${location.origin}/key/密語`;
+
+    $("startForm").onsubmit = (e) => {
         e.preventDefault();
-        const msg = text.value.trim();
-        if (!msg || state !== "chatting") return;
-        send("msg", { text: msg });
-        add("msg me", msg);
-        text.value = "";
+        const key = $("key").value.trim();
+        store.set("chatty.key", key);
+        audioCtx ??= new AudioContext(); // unlock sound on this user gesture
+        post("/api/start", { key });
     };
+    $("cancelWait").onclick = () => post("/api/leave");
+
+    $("composer").onsubmit = (e) => {
+        e.preventDefault();
+        const text = $("text").value.trim();
+        if (!text || !convo || partnerLeft) return;
+        $("text").value = "";
+        autosize();
+        queue({ type: "text", text });
+        $("text").focus();
+    };
+    const autosize = () => {
+        $("text").style.height = "auto";
+        $("text").style.height = `${$("text").scrollHeight + 2}px`;
+    };
+    $("text").addEventListener("input", () => {
+        autosize();
+        if (Date.now() - lastTyping > 4000 && convo) {
+            lastTyping = Date.now();
+            post("/api/typing").catch(() => {});
+        }
+    });
+    $("text").addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !matchMedia("(pointer: coarse)").matches) {
+            e.preventDefault();
+            $("composer").requestSubmit();
+        }
+    });
+
+    function sendImage(file) {
+        if (!file?.type.startsWith("image/") || !convo) return;
+        queue({ type: "image", blob: file, local: URL.createObjectURL(file) });
+    }
+    $("imageBtn").onclick = () => $("file").click();
+    $("file").onchange = () => {
+        sendImage($("file").files[0]);
+        $("file").value = "";
+    };
+    $("text").addEventListener("paste", (e) => {
+        const file = [...e.clipboardData.files].find((f) => f.type.startsWith("image/"));
+        if (file) {
+            e.preventDefault();
+            sendImage(file);
+        }
+    });
+
+    let recorder;
+    $("micBtn").onclick = async () => {
+        if (recorder) return recorder.stop();
+        if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return alert("這個瀏覽器（或非 HTTPS 連線）無法錄音");
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch {
+            return alert("無法使用麥克風");
+        }
+        const chunks = [], started = Date.now();
+        recorder = new MediaRecorder(stream);
+        recorder.ondataavailable = (e) => chunks.push(e.data);
+        recorder.onstop = () => {
+            stream.getTracks().forEach((t) => t.stop());
+            $("micBtn").classList.remove("recording");
+            const blob = new Blob(chunks, { type: recorder.mimeType.split(";")[0] });
+            recorder = null;
+            if (blob.size && convo) queue({ type: "audio", blob, duration: (Date.now() - started) / 1000 });
+        };
+        recorder.start();
+        $("micBtn").classList.add("recording");
+        setTimeout(() => recorder?.state === "recording" && recorder.stop(), 120000);
+    };
+
+    // Leaving. Like WooTalk, a long chat needs "leave" typed out so it can't be ended by accident.
+    $("leaveBtn").onclick = () => {
+        if (partnerLeft) return post("/api/leave");
+        const long = msgs.length > 100;
+        $("leaveTypeBox").hidden = !long;
+        $("leaveType").value = "";
+        $("leaveDialog").showModal();
+    };
+    $("leaveConfirm").onclick = (e) => {
+        if (!$("leaveTypeBox").hidden && $("leaveType").value.trim().toLowerCase() !== "leave") {
+            e.preventDefault();
+            $("leaveType").focus();
+        }
+    };
+    $("leaveDialog").onclose = () => {
+        if ($("leaveDialog").returnValue === "leave") post("/api/leave");
+        if ($("leaveDialog").returnValue === "report") openReport();
+    };
+    $("newChat").onclick = () => post("/api/leave");
+
+    function openReport() {
+        $("reportDialog").querySelectorAll("input").forEach((i) => (i.type === "checkbox" ? (i.checked = false) : (i.value = "")));
+        $("reportHint").classList.remove("err");
+        $("reportDialog").showModal();
+    }
+    $("reportBtn2").onclick = openReport;
+    const reasons = () => [...$("reportDialog").querySelectorAll("input:checked")].map((i) => i.value).concat($("otherReason").value.trim() || []);
+    $("reportConfirm").onclick = (e) => {
+        if (!reasons().length) {
+            e.preventDefault();
+            $("reportHint").classList.add("err");
+        }
+    };
+    $("reportDialog").onclose = () => $("reportDialog").returnValue === "report" && post("/api/report", { reasons: reasons() });
+
+    $("menuBtn").onclick = () => {
+        $("soundToggle").checked = store.get("chatty.sound", true);
+        $("menuDialog").showModal();
+    };
+    $("soundToggle").onchange = () => store.set("chatty.sound", $("soundToggle").checked);
+    $("copyResume").onclick = async () => {
+        const link = `${location.origin}/resume/${me}`;
+        try {
+            await navigator.clipboard.writeText(link);
+            $("copyResume").lastElementChild.textContent = "已複製！";
+        } catch {
+            prompt("複製這個連結：", link);
+        }
+    };
+
+    connect();
 </script>
 </body>
 </html>
