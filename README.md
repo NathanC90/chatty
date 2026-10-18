@@ -1,4 +1,4 @@
-# Stranger Chat
+# Chatty
 
 A WooTalk-style anonymous chat: click 開始聊天 to be randomly paired with a stranger for a 1-on-1 text chat, with a typing indicator and leave/rematch.
 
