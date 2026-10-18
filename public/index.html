@@ -63,6 +63,24 @@
     .pending .bubble { opacity: 0.55; }
     .bubble.media { padding: 4px; background: none; }
     .bubble img { display: block; max-width: min(260px, 100%); max-height: 320px; border-radius: 14px; border: 1px solid var(--line); }
+    .line { display: flex; align-items: center; gap: 4px; max-width: 100%; }
+    .line > .bubble { min-width: 0; }
+    .me .line { flex-direction: row-reverse; }
+    .react-btn { flex: none; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; color: var(--muted); opacity: 0; }
+    .react-btn svg { width: 18px; height: 18px; fill: currentColor; }
+    .row:hover .react-btn, .react-btn:focus-visible { opacity: 1; }
+    .react-btn:hover { background: var(--bg); color: var(--text); }
+    @media (pointer: coarse) {
+        .react-btn { display: none; } /* phones: long-press the message instead */
+        .bubble[data-id] { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    }
+    .reacts { position: relative; margin: -6px 8px 0; padding: 1px 7px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 0.85rem; line-height: 1.5; box-shadow: 0 1px 3px rgb(0 0 0 / 0.12); }
+    .picker { position: fixed; z-index: 10; display: flex; align-items: center; padding: 4px; border: 1px solid var(--line); border-radius: 26px; background: var(--surface); box-shadow: 0 8px 30px rgb(0 0 0 / 0.2); }
+    .picker #emojis { display: flex; }
+    .picker #emojis button { width: 42px; height: 42px; border-radius: 50%; font-size: 1.45rem; transition: transform 0.12s; }
+    .picker #emojis button:hover { transform: scale(1.2); }
+    .picker #emojis button.selected { background: var(--them); }
+    .picker .copy { height: 34px; margin-left: 2px; padding: 0 12px; border-left: 1px solid var(--line); color: var(--muted); font-size: 0.85rem; }
     .voice { display: flex; align-items: center; gap: 8px; padding: 2px 4px; color: inherit; }
     .voice svg { width: 22px; height: 22px; fill: currentColor; }
     .meta { font-size: 0.72rem; color: var(--muted); padding: 2px 6px; }
@@ -131,6 +149,11 @@
             <button class="primary" id="newChat">離開並找新對象</button>
         </div>
     </section>
+</div>
+
+<div class="picker" id="picker" role="menu" hidden>
+    <div id="emojis"></div>
+    <button type="button" class="copy" id="copyMsg">複製</button>
 </div>
 
 <dialog id="leaveDialog">
@@ -259,12 +282,17 @@
             if (d.reset) hasMore = d.hasMore;
             delivered = d.delivered;
             partnerLeft = d.partnerLeft;
+            // Reactions changed on messages already on screen (e.g. while this page was offline).
+            for (const m of msgs) m.reactions = d.reactions?.[m.id] ?? m.reactions;
             show("chat");
             merge(d.messages, true);
             flushPending();
         } else if (d.type === "msg" && convo) {
-            const m = d.msg;
-            if (!m.mine) {
+            const m = d.msg, old = msgs.find((x) => x.id === m.id);
+            if (old) {
+                // Same message again: a reaction changed.
+                if (m.reactions?.theirs && m.reactions.theirs !== old.reactions?.theirs) notify();
+            } else if (!m.mine) {
                 $("typing").textContent = "";
                 if (m.type === "leave") partnerLeft = true;
                 else notify();
@@ -281,13 +309,12 @@
     }
 
     function merge(list, toBottom) {
-        const ids = new Set(msgs.map((m) => m.id));
+        const byId = new Map(msgs.map((m) => [m.id, m]));
         for (const m of list) {
-            if (ids.has(m.id)) continue;
-            msgs.push(m);
+            byId.set(m.id, m); // a newer copy of a message (e.g. with a reaction) replaces the old one
             if (m.mine) pending = pending.filter((p) => p.cid !== m.cid);
         }
-        msgs.sort((a, b) => a.id - b.id);
+        msgs = [...byId.values()].sort((a, b) => a.id - b.id);
         lastId = Math.max(lastId, ...msgs.map((m) => m.id));
         savePending();
         render(toBottom);
@@ -434,7 +461,22 @@
             const meta = [time(m.time)];
             if (!m.mine && m.mobile) meta.unshift("行動裝置");
             if (m === lastMine && !pending.some((p) => p.convo === convo)) meta.push(delivered >= m.id ? "已送達" : "已送出");
-            row.append(content(m), el("div", "meta", meta.join(" · ")));
+            const bubble = content(m);
+            bubble.dataset.id = m.id;
+            const line = el("div", "line");
+            line.append(bubble);
+            if (!partnerLeft) {
+                const btn = el("button", "react-btn");
+                btn.type = "button";
+                btn.setAttribute("aria-label", "加上表情");
+                btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm-3.5-9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm7 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM12 17.5a5.5 5.5 0 0 0 5.1-3.5H6.9a5.5 5.5 0 0 0 5.1 3.5z"/></svg>';
+                btn.onclick = () => openPicker(m.id, bubble);
+                line.append(btn);
+            }
+            row.append(line);
+            const chips = reactionChips(m, bubble);
+            if (chips) row.append(chips);
+            row.append(el("div", "meta", meta.join(" · ")));
             out.push(row);
         }
         for (const p of pending.filter((p) => p.convo === convo)) {
@@ -448,6 +490,98 @@
         else log.scrollTop = log.scrollHeight - fromBottom; // keep position when older messages are added
         if (convo) show("chat");
     }
+
+    // ---------- reactions ----------
+    // Long-press a message (phone), or hover / right-click it (computer). One per person; tap yours again to remove it.
+
+    const EMOJI = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+    const picker = $("picker");
+    let pickerFor = null;
+    for (const e of EMOJI) {
+        const b = el("button", null, e);
+        b.type = "button";
+        b.setAttribute("aria-label", `回應 ${e}`);
+        b.onclick = () => react(pickerFor, e);
+        $("emojis").append(b);
+    }
+
+    function reactionChips(m, bubble) {
+        const { mine, theirs } = m.reactions || {};
+        const list = [theirs, mine].filter(Boolean);
+        if (!list.length) return null;
+        const chip = el("button", "reacts", list[0] === list[1] ? `${list[0]} 2` : list.join(" "));
+        chip.type = "button";
+        chip.title = [theirs && `對方 ${theirs}`, mine && `你 ${mine}`].filter(Boolean).join("、");
+        chip.onclick = () => openPicker(m.id, bubble);
+        return chip;
+    }
+
+    function openPicker(id, anchor) {
+        const m = msgs.find((x) => x.id === id);
+        if (!m || partnerLeft) return;
+        pickerFor = m;
+        for (const b of $("emojis").children) b.classList.toggle("selected", b.textContent === m.reactions?.mine);
+        $("copyMsg").hidden = m.type !== "text";
+        picker.hidden = false;
+        const r = anchor.getBoundingClientRect(), w = picker.offsetWidth, h = picker.offsetHeight;
+        picker.style.left = `${Math.min(Math.max(8, m.mine ? r.right - w : r.left), innerWidth - w - 8)}px`;
+        picker.style.top = `${r.top - h - 8 > 8 ? r.top - h - 8 : r.bottom + 8}px`;
+    }
+    function closePicker() {
+        picker.hidden = true;
+        pickerFor = null;
+    }
+
+    async function react(m, emoji) {
+        closePicker();
+        const before = m.reactions?.mine ?? null;
+        const next = before === emoji ? null : emoji;
+        m.reactions = { ...m.reactions, mine: next }; // show it right away; the server echoes the final state
+        render();
+        try {
+            if (!(await post("/api/react", { id: m.id, emoji: next || "" })).ok) throw new Error();
+        } catch {
+            m.reactions = { ...m.reactions, mine: before };
+            render();
+        }
+    }
+
+    $("copyMsg").onclick = () => {
+        navigator.clipboard?.writeText(pickerFor.text).catch(() => {});
+        closePicker();
+    };
+    document.addEventListener("pointerdown", (e) => !picker.contains(e.target) && closePicker());
+    document.addEventListener("keydown", (e) => e.key === "Escape" && closePicker());
+    for (const t of ["wheel", "touchmove"]) log.addEventListener(t, closePicker, { passive: true });
+
+    const bubbleOf = (target) => target.closest?.(".bubble[data-id]");
+    let pressTimer, pressed = false, pressX, pressY;
+    log.addEventListener("pointerdown", (e) => {
+        pressed = false;
+        const b = bubbleOf(e.target);
+        if (!b || e.pointerType === "mouse") return;
+        [pressX, pressY] = [e.clientX, e.clientY];
+        pressTimer = setTimeout(() => {
+            pressed = true;
+            navigator.vibrate?.(10);
+            openPicker(Number(b.dataset.id), b);
+        }, 450);
+    });
+    log.addEventListener("pointermove", (e) => Math.hypot(e.clientX - pressX, e.clientY - pressY) > 10 && clearTimeout(pressTimer));
+    for (const t of ["pointerup", "pointercancel"]) log.addEventListener(t, () => clearTimeout(pressTimer));
+    // The tap that ends a long-press must not also open the image or link under the finger.
+    log.addEventListener("click", (e) => {
+        if (!pressed) return;
+        pressed = false;
+        e.preventDefault();
+        e.stopPropagation();
+    }, true);
+    log.addEventListener("contextmenu", (e) => {
+        const b = bubbleOf(e.target);
+        if (!b) return;
+        e.preventDefault();
+        openPicker(Number(b.dataset.id), b);
+    });
 
     async function loadMore() {
         const res = await fetch(`/api/history?before=${msgs[0]?.id ?? lastId + 1}`);

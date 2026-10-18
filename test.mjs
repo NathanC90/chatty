@@ -87,6 +87,17 @@ try {
     assert.deepEqual(await a.next(), { type: "delivered", id: got.msg.id });
     assert.equal((await a.post("/api/send", { cid: "c2", text: "   " })).status, 400);
 
+    // Reactions: one per person per message, from a fixed set; both sides see who reacted with what.
+    await b.post("/api/react", { id: got.msg.id, emoji: "❤️" });
+    assert.deepEqual((await a.next()).msg.reactions, { mine: null, theirs: "❤️" });
+    assert.deepEqual((await b.next()).msg.reactions, { mine: "❤️", theirs: null });
+    await a.post("/api/react", { id: got.msg.id, emoji: "😂" });
+    await a.post("/api/react", { id: got.msg.id, emoji: "👍" }); // changing replaces
+    await a.next(), await b.next(), await a.next();
+    assert.deepEqual((await b.next()).msg.reactions, { mine: "❤️", theirs: "👍" });
+    assert.equal((await b.post("/api/react", { id: got.msg.id, emoji: "💩" })).status, 400);
+    assert.equal((await b.post("/api/react", { id: 999999, emoji: "👍" })).status, 400);
+
     // Images: stored, served only to the two people in the chat.
     const img = await fetch(`${base}/api/upload?cid=i1`, { method: "POST", headers: { cookie: a.cookie, "content-type": "image/png" }, body: "png-bytes" });
     assert.equal(img.status, 204);
@@ -109,11 +120,13 @@ try {
     await assert.rejects(b.post("/api/send", { cid: "c3", text: "you there?" }));
     await startServer();
     await b.post("/api/send", { cid: "c3", text: "you there?" });
+    await b.post("/api/react", { id: got.msg.id, emoji: "" }); // b takes its ❤️ back while a is offline
 
     // a reconnects asking for what came after the last message it saw, and gets exactly that; a fresh page load gets the whole history.
     await a.listen(lastSeenByA);
     const resumed = await a.next();
     assert.deepEqual([resumed.state, resumed.reset, resumed.messages.map((m) => m.text)], ["chat", false, ["you there?"]]);
+    assert.deepEqual(resumed.reactions[got.msg.id], { mine: "👍", theirs: null }); // the removal catches up too
     await b.listen();
     const reload = await b.next();
     assert.deepEqual(reload.messages.map((m) => m.text ?? m.type), ["hello", "image", "you there?"]);
@@ -131,6 +144,7 @@ try {
     assert.equal((await a.next()).state, "idle");
     assert.equal((await b.next()).msg.type, "leave");
     assert.equal((await b.post("/api/send", { cid: "c4", text: "hi" })).status, 409);
+    assert.equal((await b.post("/api/react", { id: got.msg.id, emoji: "👍" })).status, 409);
     await b.post("/api/leave");
     assert.equal((await b.next()).state, "idle");
     assert.equal((await fetch(base + url, { headers: { cookie: b.cookie } })).status, 404);

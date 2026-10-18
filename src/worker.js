@@ -9,6 +9,7 @@ import { DurableObject } from "cloudflare:workers";
 const PAGE = 100; // messages per history page
 const MAX_TEXT = 2000;
 const MAX_UPLOAD = 1.9 * 1024 * 1024; // one SQLite row holds at most 2 MB
+const EMOJI = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 const TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp", "audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg"];
 
 const cookieUid = (req) => /(?:^|;\s*)uid=([0-9a-f-]{36})/.exec(req.headers.get("Cookie") || "")?.[1];
@@ -46,6 +47,10 @@ export class Chat extends DurableObject {
             CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, convo TEXT, mime TEXT, data BLOB);
             CREATE TABLE IF NOT EXISTS reports (time INTEGER, by TEXT, reasons TEXT, transcript TEXT);
         `);
+        // Added after launch: existing databases get the column, their messages are kept.
+        if (!this.sql.exec("SELECT * FROM messages LIMIT 0").columnNames.includes("reactions")) {
+            this.sql.exec("ALTER TABLE messages ADD COLUMN reactions TEXT"); // JSON: { uid: emoji }
+        }
         // Answers the page's keep-alive pings without waking this object up.
         ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     }
@@ -69,9 +74,15 @@ export class Chat extends DurableObject {
     partnerOf = (c, uid) => (c.a === uid ? c.b : c.a);
     partnerLeft = (c) => !!this.row("SELECT 1 FROM messages WHERE convo = ? AND type = 'leave'", c.id);
 
+    reactionsOf(m, uid) {
+        const r = JSON.parse(m.reactions || "{}");
+        return { mine: r[uid] || null, theirs: Object.entries(r).find(([k]) => k !== uid)?.[1] || null };
+    }
+
     view = (m, uid) => ({
         id: m.id, type: m.type, text: m.text ?? undefined, cid: m.cid, time: m.time, duration: m.duration,
         mobile: !!m.mobile, mine: m.sender === uid, url: m.file ? `/uploads/${m.convo}/${m.file}` : undefined,
+        reactions: this.reactionsOf(m, uid),
     });
 
     snapshot(uid, after) {
@@ -87,6 +98,10 @@ export class Chat extends DurableObject {
             messages: messages.map((m) => this.view(m, uid)),
             delivered: c.a === uid ? c.delivered_b : c.delivered_a,
             partnerLeft: this.partnerLeft(c),
+            // Every reacted message, so reactions changed on older messages while offline catch up too.
+            reactions: Object.fromEntries(
+                this.rows("SELECT * FROM messages WHERE convo = ? AND reactions IS NOT NULL", c.id).map((m) => [m.id, this.reactionsOf(m, uid)]),
+            ),
         };
     }
 
@@ -96,7 +111,12 @@ export class Chat extends DurableObject {
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
             c.id, uid, m.type, m.text ?? null, m.file ?? null, m.cid ?? null, m.mobile ? 1 : 0, m.duration ?? 0, Date.now(),
         );
-        for (const u of [c.a, c.b]) if (this.user(u).convo === c.id) this.emit(u, { type: "msg", msg: this.view(saved, u) });
+        this.broadcast(c, saved);
+    }
+
+    // Sends a new or changed message to whoever is still in the chat; the page replaces it by id.
+    broadcast(c, m) {
+        for (const u of [c.a, c.b]) if (this.user(u).convo === c.id) this.emit(u, { type: "msg", msg: this.view(m, u) });
     }
 
     start(uid, key) {
@@ -200,6 +220,15 @@ export class Chat extends DurableObject {
             if (!text.trim()) return empty(400);
             // The page retries until it sees its message come back; cid makes retries harmless.
             if (!isDuplicate(cid)) this.addMessage(c, uid, { type: "text", text, cid, mobile: /Mobi/.test(req.headers.get("User-Agent") || "") });
+        } else if (path === "/api/react") {
+            // One reaction per person per message; an empty emoji removes yours.
+            const m = this.row("SELECT * FROM messages WHERE id = ? AND convo = ? AND type != 'leave'", Number(body.id) || 0, c.id);
+            const emoji = body.emoji ? String(body.emoji) : "";
+            if (!m || (emoji && !EMOJI.includes(emoji))) return empty(400);
+            const r = JSON.parse(m.reactions || "{}");
+            if (emoji) r[uid] = emoji;
+            else delete r[uid];
+            this.broadcast(c, this.row("UPDATE messages SET reactions = ? WHERE id = ? RETURNING *", JSON.stringify(r), m.id));
         } else if (path === "/api/typing") this.emit(this.partnerOf(c, uid), { type: "typing" });
         else if (path === "/api/delivered") {
             const id = Number(body.id) || 0;
