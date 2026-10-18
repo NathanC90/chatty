@@ -218,11 +218,7 @@
 <dialog id="leaveDialog">
     <form method="dialog">
         <h2>確定要離開嗎？</h2>
-        <p>離開後這段對話就會結束，無法再找回。</p>
-        <div id="leaveTypeBox" hidden>
-            <p>因為你們聊了很多，若確定要離開，請在下方輸入 <b>leave</b></p>
-            <input class="field" id="leaveType" placeholder="在此輸入 leave" autocomplete="off">
-        </div>
+        <p id="leaveText"></p>
         <div class="actions">
             <button class="ghost" value="report" style="margin-right: auto">回報</button>
             <button class="ghost" value="cancel">取消</button>
@@ -957,29 +953,25 @@
         }
     });
 
-    // Leaving. Like WooTalk, a long chat needs "leave" typed out so it can't be ended by accident.
-    $("leaveBtn").onclick = () => {
-        if (partnerLeft) return post("/api/leave");
-        const long = msgs.length > 100;
-        $("leaveTypeBox").hidden = !long;
-        $("leaveType").value = "";
+    // Leaving always asks first: one tap on 離開對話 to confirm.
+    function confirmLeave() {
+        $("leaveText").textContent = partnerLeft
+            ? "對方已經離開了，你離開後這段對話會被永久刪除，無法再找回。"
+            : "離開後這段對話就會結束，無法再找回。";
+        $("leaveDialog").returnValue = ""; // else Esc would repeat the previous choice
         $("leaveDialog").showModal();
-    };
-    $("leaveConfirm").onclick = (e) => {
-        if (!$("leaveTypeBox").hidden && $("leaveType").value.trim().toLowerCase() !== "leave") {
-            e.preventDefault();
-            $("leaveType").focus();
-        }
-    };
+    }
+    $("leaveBtn").onclick = confirmLeave;
+    $("newChat").onclick = confirmLeave;
     $("leaveDialog").onclose = () => {
         if ($("leaveDialog").returnValue === "leave") post("/api/leave");
         if ($("leaveDialog").returnValue === "report") openReport();
     };
-    $("newChat").onclick = () => post("/api/leave");
 
     function openReport() {
         $("reportDialog").querySelectorAll("input").forEach((i) => (i.type === "checkbox" ? (i.checked = false) : (i.value = "")));
         $("reportHint").classList.remove("err");
+        $("reportDialog").returnValue = "";
         $("reportDialog").showModal();
     }
     $("reportBtn2").onclick = openReport;

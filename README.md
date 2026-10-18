@@ -16,7 +16,7 @@ A small anonymous 1-on-1 chat in the spirit of [WooTalk 吾聊](https://wootalk.
 - 對方正在輸入… typing indicator, 已送出 / 已送達 (delivered to their device, not "read").
 - Times, 今日 / 昨日 date dividers, and 載入更早的訊息 for long histories.
 - Sound alert for new messages (toggle in 設定), and an unread count in the tab title.
-- 離開 asks for confirmation. After 100+ messages you have to type `leave`, so a long chat can't be ended by accident. The other person sees 對方已離開 and can 回報 (report) or start over.
+- 離開 always asks for confirmation first: one tap on 離開對話, nothing to type. The other person sees 對方已離開 and can 回報 (report) or leave too, which also asks first, since the chat is then deleted for good.
 - Light and dark mode, phone-friendly.
 
 ## Deploying (free)
