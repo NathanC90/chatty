@@ -24,7 +24,7 @@
     a, button { -webkit-tap-highlight-color: transparent; }
     [hidden] { display: none !important; }
 
-    .app { height: 100dvh; max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; background: var(--surface); }
+    .app { position: relative; height: 100dvh; max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; background: var(--surface); }
     @media (min-width: 760px) { .app { border-inline: 1px solid var(--line); } }
 
     /* home + waiting */
@@ -38,7 +38,18 @@
     .primary { padding: 12px 20px; border-radius: 12px; background: var(--accent); color: var(--on-accent); font-weight: 600; }
     .ghost { padding: 10px 16px; border-radius: 12px; color: var(--muted); }
     .ghost:hover { background: var(--bg); }
-    .hint { max-width: 340px; font-size: 0.85rem; color: var(--muted); }
+    /* 說明: a ? inside the secret-word field; hover on a computer, tap to open / close on a phone */
+    .key-row { position: relative; }
+    .key-row .field { padding-right: 46px; }
+    .help-wrap { position: absolute; top: 50%; right: 7px; transform: translateY(-50%); }
+    .help-btn { width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); color: var(--muted); font-size: 0.9rem; font-weight: 600; }
+    .help-btn:hover, .help-btn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+    .help { display: none; position: absolute; z-index: 5; top: calc(100% + 10px); right: -7px; width: min(300px, calc(100vw - 32px)); padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: 0 8px 30px rgb(0 0 0 / 0.15); color: var(--muted); font-size: 0.85rem; text-align: left; }
+    .help.open { display: block; }
+    @media (hover: hover) { .help-wrap:hover .help { display: block; } }
+    .help ul { display: grid; gap: 6px; margin: 0; padding-left: 18px; }
+    .help b { color: var(--text); font-weight: 600; word-break: break-all; }
+    .copyright { position: absolute; left: 0; right: 0; bottom: max(14px, env(safe-area-inset-bottom)); color: var(--muted); font-size: 0.75rem; text-align: center; }
     .spinner { width: 36px; height: 36px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.9s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -149,10 +160,22 @@
         <div class="logo">Chatty<span>.</span></div>
         <p class="sub">找個人，輕鬆聊天</p>
         <form class="home-form" id="startForm">
-            <input class="field" id="key" maxlength="50" placeholder="輸入密語來相遇（可留空）" aria-label="密語" autocomplete="off">
+            <div class="key-row">
+                <input class="field" id="key" maxlength="50" placeholder="輸入密語來相遇（可留空）" aria-label="密語" autocomplete="off">
+                <span class="help-wrap">
+                    <button type="button" class="help-btn" id="helpBtn" aria-label="說明" aria-expanded="false" aria-controls="help">?</button>
+                    <div class="help" id="help" role="note">
+                        <ul>
+                            <li>輸入相同密語的人會互相配對；留空則隨機配對。</li>
+                            <li>分享 <b id="keyLink">/key/密語</b>，打開就直接使用那個密語。</li>
+                            <li>斷線、重新整理都不會中斷對話；要真正結束，請按「離開」。</li>
+                        </ul>
+                    </div>
+                </span>
+            </div>
             <button class="primary">開始聊天</button>
         </form>
-        <p class="hint">輸入相同密語的人會互相配對；留空則隨機配對。也可以分享 <b id="keyLink">/key/密語</b> 連結，打開就直接用那個密語。斷線、重新整理、伺服器重啟都不會中斷你們的對話；要真正結束，請按「離開」。</p>
+        <p class="copyright">© <span id="year">2026</span> Chatty. All rights reserved.</p>
     </section>
 
     <section class="center" id="waiting" hidden>
@@ -805,6 +828,14 @@
     const pathKey = location.pathname.startsWith("/key/") ? decodeURIComponent(location.pathname.slice(5)) : null;
     $("key").value = pathKey ?? store.get("chatty.key", "");
     $("keyLink").textContent = `${location.origin}/key/密語`;
+    $("year").textContent = new Date().getFullYear();
+    const setHelp = (open) => {
+        $("help").classList.toggle("open", open);
+        $("helpBtn").setAttribute("aria-expanded", open);
+    };
+    $("helpBtn").onclick = () => setHelp(!$("help").classList.contains("open"));
+    document.addEventListener("pointerdown", (e) => !e.target.closest(".help-wrap") && setHelp(false));
+    document.addEventListener("keydown", (e) => e.key === "Escape" && setHelp(false));
 
     $("startForm").onsubmit = (e) => {
         e.preventDefault();
