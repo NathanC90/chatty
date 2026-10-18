@@ -89,12 +89,23 @@
     .viewer img { max-width: 100vw; max-height: 100dvh; object-fit: contain; }
     .viewer-bar { position: fixed; top: max(8px, env(safe-area-inset-top)); right: 8px; display: flex; gap: 4px; }
     .viewer .icon, .viewer .icon:hover { color: #fff; background: rgb(255 255 255 / 0.12); }
-    .picker { position: fixed; z-index: 10; display: flex; align-items: center; padding: 4px; border: 1px solid var(--line); border-radius: 26px; background: var(--surface); box-shadow: 0 8px 30px rgb(0 0 0 / 0.2); }
+    .picker { position: fixed; z-index: 10; display: flex; flex-direction: column; padding: 4px; border: 1px solid var(--line); border-radius: 22px; background: var(--surface); box-shadow: 0 8px 30px rgb(0 0 0 / 0.2); }
     .picker #emojis { display: flex; }
     .picker #emojis button { width: 42px; height: 42px; border-radius: 50%; font-size: 1.45rem; transition: transform 0.12s; }
     .picker #emojis button:hover { transform: scale(1.2); }
     .picker #emojis button.selected { background: var(--them); }
-    .picker .copy { height: 34px; margin-left: 2px; padding: 0 12px; border-left: 1px solid var(--line); color: var(--muted); font-size: 0.85rem; }
+    .picker .acts { display: flex; margin-top: 2px; padding-top: 2px; border-top: 1px solid var(--line); }
+    .picker .acts button { flex: 1; padding: 8px 10px; border-radius: 12px; font-size: 0.9rem; }
+    .picker .acts button:hover { background: var(--bg); }
+    .picker .acts .unsend { color: var(--danger); }
+    /* Replies: the quoted message above a reply, and the preview bar above the text box */
+    .quote { display: block; max-width: 100%; margin-bottom: 2px; padding: 4px 10px; border-left: 3px solid var(--accent); border-radius: 8px; background: var(--bg); color: var(--muted); font-size: 0.8rem; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .quote b, .replybar b { margin-right: 6px; color: var(--text); font-weight: 600; }
+    .replybar { display: flex; align-items: center; gap: 8px; padding: 8px 8px 0 16px; border-top: 1px solid var(--line); }
+    .replybar > div { flex: 1; min-width: 0; padding-left: 10px; border-left: 3px solid var(--accent); color: var(--muted); font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .replybar:not([hidden]) + .composer { border-top: 0; }
+    .flash { animation: flash 1.4s ease-out; }
+    @keyframes flash { 0%, 40% { box-shadow: 0 0 0 4px rgb(91 91 247 / 0.5); } 100% { box-shadow: 0 0 0 4px transparent; } }
     .voice { display: flex; align-items: center; gap: 8px; padding: 2px 4px; color: inherit; }
     .voice svg { width: 22px; height: 22px; fill: currentColor; }
     .meta { font-size: 0.72rem; color: var(--muted); padding: 2px 6px; }
@@ -161,6 +172,10 @@
         <div class="banner" id="storageWarn" hidden>儲存空間快滿了：之後會自動刪除最舊的照片和語音（文字和表情不受影響）</div>
         <div id="log" aria-live="polite"></div>
         <div id="typing"></div>
+        <div class="replybar" id="replybar" hidden>
+            <div><b id="replyWho"></b><span id="replyText"></span></div>
+            <button type="button" class="icon" id="replyCancel" aria-label="取消回覆"><svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+        </div>
         <form class="composer" id="composer">
             <button type="button" class="icon" id="imageBtn" aria-label="傳送圖片"><svg viewBox="0 0 24 24"><path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H5V5h14v14zm-5.04-6.71-2.75 3.54-1.96-2.36L6.5 17h11l-3.54-4.71z"/></svg></button>
             <button type="button" class="icon" id="micBtn" aria-label="語音訊息"><svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg></button>
@@ -193,7 +208,11 @@
 
 <div class="picker" id="picker" role="menu" hidden>
     <div id="emojis"></div>
-    <button type="button" class="copy" id="copyMsg">複製</button>
+    <div class="acts">
+        <button type="button" id="replyMsg">回覆</button>
+        <button type="button" id="copyMsg">複製</button>
+        <button type="button" class="unsend" id="unsendMsg">收回</button>
+    </div>
 </div>
 
 <dialog id="leaveDialog">
@@ -345,6 +364,7 @@
             partnerPresence = d.presence;
             // Reactions changed on messages already on screen (e.g. while this page was offline).
             for (const m of msgs) m.reactions = d.reactions?.[m.id] ?? m.reactions;
+            for (const m of msgs) if (d.unsent?.includes(m.id)) Object.assign(m, { type: "unsent", text: undefined, url: undefined, reactions: null });
             show("chat");
             merge(d.messages, true);
             refreshUsage();
@@ -353,8 +373,9 @@
             const m = d.msg, old = msgs.find((x) => x.id === m.id);
             if (m.url || old?.url) refreshUsage(); // a photo or voice clip arrived or expired
             if (old) {
-                // Same message again: a reaction changed.
+                // Same message again: a reaction changed, or it was unsent.
                 if (m.reactions?.theirs && m.reactions.theirs !== old.reactions?.theirs) notify();
+                if (m.type === "unsent" && replyTo?.id === m.id) cancelReply();
             } else if (!m.mine) {
                 $("typing").textContent = "";
                 if (m.type === "leave") partnerLeft = true;
@@ -399,8 +420,8 @@
         try {
             for (const p of pending.filter((p) => p.convo === convo)) {
                 const res = p.blob
-                    ? await post(`/api/upload?cid=${p.cid}&duration=${p.duration || 0}`, p.blob, { "Content-Type": p.blob.type })
-                    : await post("/api/send", { cid: p.cid, text: p.text });
+                    ? await post(`/api/upload?cid=${p.cid}&duration=${p.duration || 0}&reply=${p.reply || ""}`, p.blob, { "Content-Type": p.blob.type })
+                    : await post("/api/send", { cid: p.cid, text: p.text, reply: p.reply });
                 if (res.status === 507) alert("儲存空間已滿，這個檔案傳不出去");
                 if ((res.status >= 400 && res.status < 500) || res.status === 507) {
                     pending = pending.filter((x) => x !== p); // rejected for good (e.g. chat ended)
@@ -416,7 +437,8 @@
     }
 
     function queue(item) {
-        pending.push({ cid: newCid(), convo, time: Date.now(), ...item });
+        pending.push({ cid: newCid(), convo, time: Date.now(), reply: replyTo?.id, ...item });
+        cancelReply();
         savePending();
         render(true);
         flushPending();
@@ -527,16 +549,20 @@
         }
         if (!msgs.length && !hasMore) out.push(el("p", "sys", "已配對成功！跟對方打聲招呼吧。"));
         let prevDay;
-        const lastMine = msgs.findLast((m) => m.mine && m.type !== "leave");
+        const lastMine = msgs.findLast((m) => m.mine && m.type !== "leave" && m.type !== "unsent");
         for (const m of msgs) {
             const d = day(m.time);
             if (d !== prevDay) out.push(el("p", "sys", d));
             prevDay = d;
-            if (m.type === "leave") {
-                out.push(el("p", "sys", m.mine ? "你已離開聊天" : "對方已離開聊天"));
+            if (m.type === "leave" || m.type === "unsent") {
+                const sys = el("p", "sys", m.type === "leave" ? `${who(m)}已離開聊天` : `${who(m)}已收回一則訊息`);
+                sys.dataset.mid = m.id;
+                out.push(sys);
                 continue;
             }
             const row = el("div", `row ${m.mine ? "me" : "them"}`);
+            row.dataset.mid = m.id;
+            if (m.replyTo) row.append(quote(m.replyTo.id, m.replyTo));
             const meta = [time(m.time)];
             if (!m.mine && m.mobile) meta.unshift("行動裝置");
             if (m === lastMine && !pending.some((p) => p.convo === convo)) meta.push(delivered >= m.id ? "已送達" : "已送出");
@@ -560,6 +586,7 @@
         }
         for (const p of pending.filter((p) => p.convo === convo)) {
             const row = el("div", "row me pending");
+            if (p.reply) row.append(quote(p.reply));
             row.append(content(p), el("div", "meta", "傳送中…"));
             out.push(row);
         }
@@ -568,7 +595,62 @@
         if (stick) scrollDown();
         else log.scrollTop = log.scrollHeight - fromBottom; // keep position when older messages are added
         if (convo) show("chat");
+        if (partnerLeft) cancelReply();
         updateStatus();
+    }
+
+    // ---------- replies & unsending ----------
+
+    let replyTo = null;
+    const who = (m) => (m.mine ? "你" : "對方");
+    function snippet(m) {
+        if (!m || m.type === "unsent") return "訊息已收回";
+        if (m.type === "image") return "📷 圖片";
+        if (m.type === "audio") return `🎤 語音 ${clock(m.duration || 0)}`;
+        return m.text;
+    }
+
+    function startReply(m) {
+        replyTo = m;
+        $("replyWho").textContent = `回覆${who(m)}`;
+        $("replyText").textContent = snippet(m);
+        $("replybar").hidden = false;
+        $("text").focus();
+    }
+    function cancelReply() {
+        replyTo = null;
+        $("replybar").hidden = true;
+    }
+    $("replyCancel").onclick = cancelReply;
+
+    // The message a reply answers, shown above it. Uses this page's copy when it has one, so it
+    // follows edits like unsending; tapping it jumps to the original.
+    function quote(id, fallback) {
+        const q = msgs.find((x) => x.id === id) || fallback;
+        const btn = el("button", "quote");
+        btn.type = "button";
+        btn.append(el("b", null, q ? who(q) : ""), snippet(q));
+        btn.onclick = () => jumpTo(id);
+        return btn;
+    }
+    async function jumpTo(id) {
+        for (let i = 0; i < 20 && hasMore && !log.querySelector(`[data-mid="${id}"]`); i++) await loadMore();
+        const target = log.querySelector(`[data-mid="${id}"]`);
+        if (!target) return;
+        target.scrollIntoView({ block: "center", behavior: "smooth" });
+        const lit = target.querySelector(".bubble") || target;
+        lit.classList.remove("flash");
+        void lit.offsetWidth; // restart the animation
+        lit.classList.add("flash");
+    }
+
+    async function unsend(m) {
+        if (!confirm("要收回這則訊息嗎？收回後雙方都看不到內容。")) return;
+        try {
+            if (!(await post("/api/unsend", { id: m.id })).ok) throw new Error();
+        } catch {
+            alert("收回失敗，請確認網路連線後再試一次");
+        }
     }
 
     // ---------- image viewer ----------
@@ -614,8 +696,9 @@
 
     function openPicker(id, anchor) {
         const m = msgs.find((x) => x.id === id);
-        if (!m || partnerLeft) return;
+        if (!m || partnerLeft || m.type === "unsent") return;
         pickerFor = m;
+        $("unsendMsg").hidden = !m.mine;
         for (const b of $("emojis").children) b.classList.toggle("selected", b.textContent === m.reactions?.mine);
         $("copyMsg").hidden = m.type !== "text";
         picker.hidden = false;
@@ -642,12 +725,26 @@
         }
     }
 
+    $("replyMsg").onclick = () => {
+        const m = pickerFor;
+        closePicker();
+        startReply(m);
+    };
+    $("unsendMsg").onclick = () => {
+        const m = pickerFor;
+        closePicker();
+        unsend(m);
+    };
     $("copyMsg").onclick = () => {
         navigator.clipboard?.writeText(pickerFor.text).catch(() => {});
         closePicker();
     };
     document.addEventListener("pointerdown", (e) => !picker.contains(e.target) && closePicker());
-    document.addEventListener("keydown", (e) => e.key === "Escape" && closePicker());
+    document.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape") return;
+        if (!picker.hidden) closePicker();
+        else if (replyTo && !rec) cancelReply();
+    });
     for (const t of ["wheel", "touchmove"]) log.addEventListener(t, closePicker, { passive: true });
 
     const bubbleOf = (target) => target.closest?.(".bubble[data-id]");

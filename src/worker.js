@@ -55,9 +55,10 @@ export class Chat extends DurableObject {
             CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, convo TEXT, mime TEXT, data BLOB);
             CREATE TABLE IF NOT EXISTS reports (time INTEGER, by TEXT, reasons TEXT, transcript TEXT);
         `);
-        // Added after launch: existing databases get the column, their messages are kept.
-        if (!this.sql.exec("SELECT * FROM messages LIMIT 0").columnNames.includes("reactions")) {
-            this.sql.exec("ALTER TABLE messages ADD COLUMN reactions TEXT"); // JSON: { uid: emoji }
+        // Columns added after launch: existing databases get them, their messages are kept.
+        const columns = this.sql.exec("SELECT * FROM messages LIMIT 0").columnNames;
+        for (const [name, type] of [["reactions", "TEXT"], ["reply_to", "INTEGER"]]) { // reactions: JSON { uid: emoji }
+            if (!columns.includes(name)) this.sql.exec(`ALTER TABLE messages ADD COLUMN ${name} ${type}`);
         }
         // Answers the page's keep-alive pings without waking this object up.
         ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
@@ -87,10 +88,17 @@ export class Chat extends DurableObject {
         return { mine: r[uid] || null, theirs: Object.entries(r).find(([k]) => k !== uid)?.[1] || null };
     }
 
+    // What a reply shows of the message it answers (the page prefers its own copy when it has one).
+    quoteOf(id, uid) {
+        const q = id && this.row("SELECT id, sender, type, text, duration FROM messages WHERE id = ?", id);
+        if (!q) return undefined;
+        return { id: q.id, mine: q.sender === uid, type: q.type, text: q.text?.slice(0, 120) ?? undefined, duration: q.duration };
+    }
+
     view = (m, uid) => ({
         id: m.id, type: m.type, text: m.text ?? undefined, cid: m.cid, time: m.time, duration: m.duration,
         mobile: !!m.mobile, mine: m.sender === uid, url: m.file ? `/uploads/${m.convo}/${m.file}` : undefined,
-        reactions: this.reactionsOf(m, uid),
+        reactions: this.reactionsOf(m, uid), replyTo: this.quoteOf(m.reply_to, uid),
     });
 
     snapshot(uid, after) {
@@ -111,14 +119,17 @@ export class Chat extends DurableObject {
             reactions: Object.fromEntries(
                 this.rows("SELECT * FROM messages WHERE convo = ? AND reactions IS NOT NULL", c.id).map((m) => [m.id, this.reactionsOf(m, uid)]),
             ),
+            // Likewise every unsent message, so ones taken back while this page was offline disappear too.
+            unsent: this.rows("SELECT id FROM messages WHERE convo = ? AND type = 'unsent'", c.id).map((m) => m.id),
         };
     }
 
     addMessage(c, uid, m) {
         const saved = this.row(
-            `INSERT INTO messages (convo, sender, type, text, file, cid, mobile, duration, time)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+            `INSERT INTO messages (convo, sender, type, text, file, cid, mobile, duration, time, reply_to)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
             c.id, uid, m.type, m.text ?? null, m.file ?? null, m.cid ?? null, m.mobile ? 1 : 0, m.duration ?? 0, Date.now(),
+            this.row("SELECT id FROM messages WHERE id = ? AND convo = ? AND type NOT IN ('leave', 'unsent')", Number(m.reply) || 0, c.id)?.id ?? null,
         );
         this.broadcast(c, saved);
     }
@@ -249,7 +260,7 @@ export class Chat extends DurableObject {
 
         if (req.method !== "POST") return empty(404);
         const isDuplicate = (cid) => !!this.row("SELECT 1 FROM messages WHERE convo = ? AND sender = ? AND cid = ?", c.id, uid, cid);
-        if (["/api/send", "/api/upload", "/api/typing", "/api/react"].includes(path)) this.touch(uid);
+        if (["/api/send", "/api/upload", "/api/typing", "/api/react", "/api/unsend"].includes(path)) this.touch(uid);
 
         if (path === "/api/upload") {
             const type = (req.headers.get("Content-Type") || "").split(";")[0].trim();
@@ -264,7 +275,7 @@ export class Chat extends DurableObject {
             this.sql.exec("INSERT INTO files (id, convo, mime, data) VALUES (?, ?, ?, ?)", file, c.id, type, data);
             this.addMessage(c, uid, {
                 type: type.startsWith("image/") ? "image" : "audio",
-                file, cid, duration: Math.min(Number(url.searchParams.get("duration")) || 0, 600),
+                file, cid, duration: Math.min(Number(url.searchParams.get("duration")) || 0, 600), reply: url.searchParams.get("reply"),
             });
             return empty(204);
         }
@@ -293,10 +304,17 @@ export class Chat extends DurableObject {
             const cid = String(body.cid || "");
             if (!text.trim()) return empty(400);
             // The page retries until it sees its message come back; cid makes retries harmless.
-            if (!isDuplicate(cid)) this.addMessage(c, uid, { type: "text", text, cid, mobile: /Mobi/.test(req.headers.get("User-Agent") || "") });
+            if (!isDuplicate(cid)) this.addMessage(c, uid, { type: "text", text, cid, reply: body.reply, mobile: /Mobi/.test(req.headers.get("User-Agent") || "") });
+        } else if (path === "/api/unsend") {
+            // Only your own messages. The content (and any photo or voice clip) is deleted for good;
+            // what's left is a marker both sides show as "…已收回一則訊息".
+            const m = this.row("SELECT * FROM messages WHERE id = ? AND convo = ? AND sender = ? AND type NOT IN ('leave', 'unsent')", Number(body.id) || 0, c.id, uid);
+            if (!m) return empty(400);
+            if (m.file) this.sql.exec("DELETE FROM files WHERE id = ?", m.file);
+            this.broadcast(c, this.row("UPDATE messages SET type = 'unsent', text = NULL, file = NULL, reactions = NULL WHERE id = ? RETURNING *", m.id));
         } else if (path === "/api/react") {
             // One reaction per person per message; an empty emoji removes yours.
-            const m = this.row("SELECT * FROM messages WHERE id = ? AND convo = ? AND type != 'leave'", Number(body.id) || 0, c.id);
+            const m = this.row("SELECT * FROM messages WHERE id = ? AND convo = ? AND type NOT IN ('leave', 'unsent')", Number(body.id) || 0, c.id);
             const emoji = body.emoji ? String(body.emoji) : "";
             if (!m || (emoji && !EMOJI.includes(emoji))) return empty(400);
             const r = JSON.parse(m.reactions || "{}");

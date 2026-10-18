@@ -105,10 +105,26 @@ try {
     assert.equal((await b.post("/api/react", { id: got.msg.id, emoji: "💩" })).status, 400);
     assert.equal((await b.post("/api/react", { id: 999999, emoji: "👍" })).status, 400);
 
+    // Replies quote the message they answer; a message from elsewhere is ignored.
+    await b.post("/api/send", { cid: "r1", text: "回你", reply: got.msg.id });
+    const reply = (await a.next()).msg;
+    await b.next();
+    assert.deepEqual(reply.replyTo, { id: got.msg.id, mine: true, type: "text", text: "hello", duration: 0 });
+    await b.post("/api/send", { cid: "r2", text: "x", reply: 999999 });
+    assert.equal((await a.next()).msg.replyTo, undefined);
+    await b.next();
+    // Unsending: only your own messages; the content is gone for both, and it can't be reacted to.
+    assert.equal((await a.post("/api/unsend", { id: reply.id })).status, 400);
+    await b.post("/api/unsend", { id: reply.id });
+    const gone = (await a.next()).msg;
+    await b.next();
+    assert.deepEqual([gone.id, gone.type, gone.text], [reply.id, "unsent", undefined]);
+    assert.equal((await b.post("/api/react", { id: reply.id, emoji: "👍" })).status, 400);
+
     // Images: stored, served only to the two people in the chat.
     const img = await fetch(`${base}/api/upload?cid=i1`, { method: "POST", headers: { cookie: a.cookie, "content-type": "image/png" }, body: "png-bytes" });
     assert.equal(img.status, 204);
-    const { url } = (await b.next()).msg;
+    const { url, id: imageId } = (await b.next()).msg;
     await a.next();
     assert.equal(await (await fetch(base + url, { headers: { cookie: b.cookie } })).text(), "png-bytes");
     assert.equal((await fetch(base + url, { headers: { cookie: stranger.cookie } })).status, 404);
@@ -131,12 +147,21 @@ try {
     await both(1);
     assert.equal((await upload("p3")).status, 204); // 3 MB would pass 90%: the two oldest images go
     const [gone1, gone2, p3] = await both(3);
-    assert.deepEqual([gone1.msg.id, gone1.msg.url], [got.msg.id + 1, undefined]);
+    assert.deepEqual([gone1.msg.id, gone1.msg.url], [imageId, undefined]);
     assert.deepEqual([gone2.msg.id, gone2.msg.url, gone2.msg.type], [p1.msg.id, undefined, "image"]);
     assert.ok(p3.msg.url);
     assert.equal((await fetch(base + p1.msg.url, { headers: { cookie: a.cookie } })).status, 404);
     const usage = await (await fetch(`${base}/api/usage`, { headers: { cookie: a.cookie } })).json();
     assert.ok(usage.limit === STORAGE_LIMIT && usage.used > 2_000_000 && usage.used < 2_400_000, JSON.stringify(usage));
+
+    // Replying with a photo, then unsending it, deletes the file too.
+    const tiny = await fetch(`${base}/api/upload?cid=u1&reply=${p3.msg.id}`, { method: "POST", headers: { cookie: a.cookie, "content-type": "image/png" }, body: "tiny" });
+    assert.equal(tiny.status, 204);
+    const [u1] = await both(1);
+    assert.equal(u1.msg.replyTo.id, p3.msg.id);
+    await a.post("/api/unsend", { id: u1.msg.id });
+    await both(1);
+    assert.equal((await fetch(base + u1.msg.url, { headers: { cookie: b.cookie } })).status, 404);
 
     // Keep-alive pings get answered.
     a.send("ping");
@@ -168,7 +193,7 @@ try {
     await presenceBecomes(a, "online");
 
     // Server goes down. b keeps writing; the message is only accepted once it's back.
-    const lastSeenByA = p3.msg.id;
+    const lastSeenByA = u1.msg.id;
     a.close(); b.close();
     await stopServer();
     await assert.rejects(b.post("/api/send", { cid: "c3", text: "you there?" }));
@@ -181,9 +206,10 @@ try {
     const resumed = await a.next();
     assert.deepEqual([resumed.state, resumed.reset, resumed.messages.map((m) => m.text)], ["chat", false, ["you there?"]]);
     assert.deepEqual(resumed.reactions[got.msg.id], { mine: "👍", theirs: null }); // the removal catches up too
+    assert.deepEqual(resumed.unsent, [reply.id, u1.msg.id]); // and so do unsent messages
     await b.listen();
     const reload = await b.next();
-    assert.deepEqual(reload.messages.map((m) => m.text ?? m.type), ["hello", "image", "image", "image", "image", "you there?"]);
+    assert.deepEqual(reload.messages.map((m) => m.text ?? m.type), ["hello", "unsent", "x", "image", "image", "image", "image", "unsent", "you there?"]);
     assert.equal(reload.delivered, 0); // a hasn't confirmed b's message yet
 
     // Same identity in another browser via the resume link.
