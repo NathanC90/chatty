@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f6f6f8">
 <title>Chatty</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
     :root {
         --bg: #f6f6f8; --surface: #fff; --text: #1c1c1e; --muted: #8e8e93; --line: #e5e5ea;
@@ -785,10 +787,10 @@
     $("reportDialog").onclose = () => $("reportDialog").returnValue === "report" && post("/api/report", { reasons: reasons() });
 
     // ---------- my status, as the other person sees it ----------
-    // 線上 while using the page; 待機 after 3 minutes without activity, or another tab on a computer;
+    // 線上 while using the page; 待機 after 10 minutes without activity, or another tab on a computer;
     // 已離線 when the page is closed or, on a phone, sent to the background.
 
-    const IDLE_MS = 3 * 60 * 1000;
+    const IDLE_MS = 10 * 60 * 1000;
     const isPhone = matchMedia("(pointer: coarse)").matches;
     let lastActive = Date.now(), reported = null;
     function myPresence() {

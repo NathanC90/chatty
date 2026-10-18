@@ -5,7 +5,7 @@ compatibility_date = "2026-10-01"
 [assets]
 directory = "./public"
 binding = "ASSETS"
-run_worker_first = true # so the page can set the identity cookie
+run_worker_first = ["/", "/key/*"] # the page sets the identity cookie; icons are served as-is
 
 [[durable_objects.bindings]]
 name = "CHAT"
