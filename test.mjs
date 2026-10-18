@@ -52,11 +52,15 @@ async function user() {
             waiting?.();
         };
     });
-    const next = async () => {
-        while (!inbox.length) await new Promise((resolve) => (waiting = resolve));
-        return inbox.shift();
+    // Presence updates arrive whenever someone connects, so they're skipped unless asked for.
+    const next = async (type) => {
+        for (;;) {
+            while (!inbox.length) await new Promise((resolve) => (waiting = resolve));
+            const m = inbox.shift();
+            if (type ? m.type === type : m.type !== "presence") return m;
+        }
     };
-    return { cookie, post, listen, next, ping: () => ws.send("ping"), close: () => ws.close() };
+    return { cookie, post, listen, next, send: (text) => ws.send(text), close: () => ws.close() };
 }
 
 try {
@@ -74,6 +78,7 @@ try {
     const matched = await a.next();
     assert.equal(matched.state, "chat");
     assert.equal(matched.key, "秘密");
+    assert.equal(matched.presence, "online"); // b is connected
     assert.equal((await b.next()).state, "chat");
 
     // Messages, typing, retry dedup, delivered receipts.
@@ -133,8 +138,18 @@ try {
     assert.ok(usage.limit === STORAGE_LIMIT && usage.used > 2_000_000 && usage.used < 2_400_000, JSON.stringify(usage));
 
     // Keep-alive pings get answered.
-    a.ping();
+    a.send("ping");
     assert.equal((await a.next()).type, "pong");
+
+    // Presence: what each page reports reaches the other person; closing the page means 已離線.
+    for (const state of ["idle", "offline", "online"]) {
+        b.send(`presence:${state}`);
+        assert.equal((await a.next("presence")).state, state);
+    }
+    b.close();
+    assert.equal((await a.next("presence")).state, "offline");
+    await b.listen(p3.msg.id);
+    assert.equal((await a.next("presence")).state, "online");
 
     // Server goes down. b keeps writing; the message is only accepted once it's back.
     const lastSeenByA = p3.msg.id;

@@ -44,8 +44,9 @@
     .who { flex: 1; min-width: 0; }
     .who b { display: block; }
     .who small { color: var(--muted); display: flex; align-items: center; gap: 6px; }
-    .dot { width: 8px; height: 8px; border-radius: 50%; background: #30a46c; }
-    .offline .dot { background: var(--muted); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background 0.3s; }
+    .dot.online { background: #30a46c; }
+    .dot.idle { background: #f5a524; }
     .icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; color: var(--muted); flex: none; }
     .icon:hover { background: var(--bg); color: var(--text); }
     .icon svg { width: 22px; height: 22px; fill: currentColor; }
@@ -133,7 +134,7 @@
     <section id="chat" hidden style="display: contents">
         <header class="top" id="top">
             <button class="leave-btn" id="leaveBtn">離開</button>
-            <div class="who"><b>陌生人</b><small><i class="dot"></i><span id="status">已連線</span></small></div>
+            <div class="who"><b>陌生人</b><small><i class="dot" id="dot"></i><span id="status">連線中…</span></small></div>
             <button class="icon" id="menuBtn" aria-label="設定"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
         </header>
         <div class="banner" id="offline" hidden>連線中…訊息會在恢復連線後送出</div>
@@ -229,7 +230,11 @@
         clearTimeout(pongTimer);
         ws?.close();
         const sock = (ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?after=${lastId}`));
-        sock.onopen = () => setOnline(true);
+        sock.onopen = () => {
+            reported = null;
+            setOnline(true);
+            reportPresence();
+        };
         sock.onmessage = (e) => {
             clearTimeout(pongTimer);
             if (e.data !== "pong") handle(JSON.parse(e.data));
@@ -252,6 +257,8 @@
     const reconnectIfNeeded = checkAlive;
     addEventListener("online", reconnectIfNeeded);
     document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) lastActive = Date.now();
+        reportPresence(); // a phone going to the home screen shows as 已離線 right away
         if (document.hidden) return;
         unread = 0;
         document.title = "Chatty";
@@ -259,9 +266,18 @@
     });
 
     let offlineTimer;
+    // The header shows the other person's status; while this page is offline it can't know it.
+    let myOnline = false, partnerPresence = "offline";
+    const STATUS = { online: "線上", idle: "待機", offline: "已離線" };
+    function updateStatus() {
+        const live = myOnline && !partnerLeft;
+        $("dot").className = `dot ${live ? partnerPresence : ""}`;
+        $("status").textContent = !myOnline ? "連線中…" : partnerLeft ? "已離開聊天" : STATUS[partnerPresence];
+    }
+
     function setOnline(online) {
-        $("top").classList.toggle("offline", !online);
-        $("status").textContent = online ? "已連線" : "連線中…";
+        myOnline = online;
+        updateStatus();
         clearTimeout(offlineTimer);
         if (online) $("offline").hidden = true;
         else offlineTimer = setTimeout(() => ($("offline").hidden = false), 1000);
@@ -288,6 +304,7 @@
             if (d.reset) hasMore = d.hasMore;
             delivered = d.delivered;
             partnerLeft = d.partnerLeft;
+            partnerPresence = d.presence;
             // Reactions changed on messages already on screen (e.g. while this page was offline).
             for (const m of msgs) m.reactions = d.reactions?.[m.id] ?? m.reactions;
             show("chat");
@@ -310,6 +327,9 @@
             $("typing").textContent = "對方正在輸入…";
             clearTimeout(typingTimer);
             typingTimer = setTimeout(() => ($("typing").textContent = ""), 6000);
+        } else if (d.type === "presence") {
+            partnerPresence = d.state;
+            updateStatus();
         } else if (d.type === "delivered") {
             delivered = Math.max(delivered, d.id);
             render();
@@ -506,6 +526,7 @@
         if (stick) scrollDown();
         else log.scrollTop = log.scrollHeight - fromBottom; // keep position when older messages are added
         if (convo) show("chat");
+        updateStatus();
     }
 
     // ---------- reactions ----------
@@ -762,6 +783,31 @@
         }
     };
     $("reportDialog").onclose = () => $("reportDialog").returnValue === "report" && post("/api/report", { reasons: reasons() });
+
+    // ---------- my status, as the other person sees it ----------
+    // 線上 while using the page; 待機 after 3 minutes without activity, or another tab on a computer;
+    // 已離線 when the page is closed or, on a phone, sent to the background.
+
+    const IDLE_MS = 3 * 60 * 1000;
+    const isPhone = matchMedia("(pointer: coarse)").matches;
+    let lastActive = Date.now(), reported = null;
+    function myPresence() {
+        if (document.hidden) return isPhone ? "offline" : "idle";
+        return Date.now() - lastActive > IDLE_MS ? "idle" : "online";
+    }
+    function reportPresence() {
+        const state = myPresence();
+        if (state === reported || ws?.readyState !== WebSocket.OPEN) return;
+        ws.send(`presence:${state}`);
+        reported = state;
+    }
+    for (const type of ["pointerdown", "keydown", "scroll", "focus"]) {
+        addEventListener(type, () => {
+            lastActive = Date.now();
+            if (reported !== "online") reportPresence();
+        }, { capture: true, passive: true });
+    }
+    setInterval(reportPresence, 15000);
 
     // ---------- storage ----------
 

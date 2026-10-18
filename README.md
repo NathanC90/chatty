@@ -10,6 +10,7 @@ A small anonymous 1-on-1 chat in the spirit of [WooTalk 吾聊](https://wootalk.
 - **On another device**: 設定 → 在其他裝置繼續這段對話 copies a link that opens the same conversation in another browser. Use it if you switch phones, or before clearing cookies or using private browsing (these lose the cookie, just like on WooTalk).
 - Text with clickable links, images (picker or paste; shrunk to 1280 px before upload), and voice messages up to 60 seconds.
 - **Emoji reactions** (👍 ❤️ 😂 😮 😢 🙏): long-press a message on a phone, or hover / right-click it on a computer. One per person per message; tap yours again to remove it. Long-press also offers 複製 (copy) for text.
+- **The other person's status** next to their name: 🟢 線上 while they're using the page; 🟠 待機 after 3 minutes without activity, or when they switch to another tab on a computer; ⚪ 已離線 when they close the page or put their phone on the home screen. If a phone loses signal without closing anything, it shows 已離線 within about 2 minutes.
 - 對方正在輸入… typing indicator, 已送出 / 已送達 (delivered to their device, not "read").
 - Times, 今日 / 昨日 date dividers, and 載入更早的訊息 for long histories.
 - Sound alert for new messages (toggle in 設定), and an unread count in the tab title.

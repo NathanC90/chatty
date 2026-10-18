@@ -11,6 +11,8 @@ const MAX_TEXT = 2000;
 const MAX_UPLOAD = 1.9 * 1024 * 1024; // one SQLite row holds at most 2 MB
 // The smallest per-object storage limit Cloudflare's free-plan docs mention. Overridable for tests.
 const STORAGE_LIMIT = 1024 ** 3;
+const PRESENCE = ["offline", "idle", "online"]; // worst to best
+const STALE_MS = 70_000; // the page pings every 25 s; a socket silent this long is treated as gone
 const EMOJI = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 const TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp", "audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg"];
 
@@ -41,6 +43,7 @@ export class Chat extends DurableObject {
         super(ctx, env);
         this.sql = ctx.storage.sql;
         this.limit = Number(env.STORAGE_LIMIT) || STORAGE_LIMIT;
+        this.sentPresence = new Map(); // "convo:uid" -> last status told to the partner
         this.sql.exec(`
             CREATE TABLE IF NOT EXISTS users (uid TEXT PRIMARY KEY, convo TEXT, waiting TEXT);
             CREATE TABLE IF NOT EXISTS convos (id TEXT PRIMARY KEY, key TEXT, a TEXT, b TEXT, delivered_a INTEGER DEFAULT 0, delivered_b INTEGER DEFAULT 0);
@@ -100,6 +103,7 @@ export class Chat extends DurableObject {
             hasMore: !after && this.row("SELECT COUNT(*) AS n FROM messages WHERE convo = ?", c.id).n > PAGE,
             messages: messages.map((m) => this.view(m, uid)),
             delivered: c.a === uid ? c.delivered_b : c.delivered_a,
+            presence: this.presenceOf(this.partnerOf(c, uid)),
             partnerLeft: this.partnerLeft(c),
             // Every reacted message, so reactions changed on older messages while offline catch up too.
             reactions: Object.fromEntries(
@@ -136,6 +140,36 @@ export class Chat extends DurableObject {
             }
         }
         this.emit(uid, this.snapshot(uid));
+    }
+
+    // Someone's status across all their open tabs: the most present one wins.
+    presenceOf(uid) {
+        let best = 0;
+        for (const ws of this.ctx.getWebSockets(uid)) {
+            const { state, since = 0 } = ws.deserializeAttachment() || {};
+            const lastPing = this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0;
+            if (ws.readyState !== WebSocket.OPEN || Date.now() - Math.max(lastPing, since) > STALE_MS) continue;
+            best = Math.max(best, PRESENCE.indexOf(state));
+        }
+        return PRESENCE[best];
+    }
+
+    // Tells the other person in uid's chat when uid's status has changed.
+    sendPresence(uid) {
+        const c = this.convo(this.user(uid).convo);
+        const partner = c && this.partnerOf(c, uid);
+        if (!partner || this.user(partner).convo !== c.id) return;
+        const state = this.presenceOf(uid);
+        if (this.sentPresence.get(`${c.id}:${uid}`) === state) return;
+        this.sentPresence.set(`${c.id}:${uid}`, state);
+        this.emit(partner, { type: "presence", state });
+    }
+
+    // Once a minute while anyone is connected: catches phones that lost signal without closing the socket.
+    async alarm() {
+        const uids = new Set(this.ctx.getWebSockets().flatMap((ws) => this.ctx.getTags(ws)));
+        for (const uid of uids) this.sendPresence(uid);
+        if (uids.size) await this.ctx.storage.setAlarm(Date.now() + 60_000);
     }
 
     // Roughly what's stored: uploads plus a little per message.
@@ -183,7 +217,10 @@ export class Chat extends DurableObject {
             if (req.headers.get("Upgrade") !== "websocket") return empty(426);
             const [client, server] = Object.values(new WebSocketPair());
             this.ctx.acceptWebSocket(server, [uid]);
+            server.serializeAttachment({ state: "online", since: Date.now() }); // the page reports its real state right after
             server.send(JSON.stringify(this.snapshot(uid, Number(url.searchParams.get("after")) || 0)));
+            this.sendPresence(uid);
+            if (!(await this.ctx.storage.getAlarm())) await this.ctx.storage.setAlarm(Date.now() + 60_000);
             return new Response(null, { status: 101, webSocket: client });
         }
 
@@ -271,10 +308,18 @@ export class Chat extends DurableObject {
         return empty(204);
     }
 
-    webSocketMessage() {} // the page only sends pings, which the auto-response answers
+    // Pings are answered by the auto-response; the only other thing the page sends is its status.
+    webSocketMessage(ws, msg) {
+        const state = /^presence:(online|idle|offline)$/.exec(msg)?.[1];
+        if (!state) return;
+        ws.serializeAttachment({ ...ws.deserializeAttachment(), state });
+        this.sendPresence(this.ctx.getTags(ws)[0]);
+    }
+
     webSocketClose(ws, code) {
         try {
             ws.close(code);
         } catch {}
+        this.sendPresence(this.ctx.getTags(ws)[0]);
     }
 }
