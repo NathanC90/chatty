@@ -1,43 +1,61 @@
-// Self-check: node test.mjs
-// Runs the real server as a child process so it can be killed and restarted mid-chat.
+// Self-check: npm test
+// Runs the real Worker under `wrangler dev` (local, nothing is deployed) so it can be
+// stopped and restarted mid-chat with its storage kept.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const DATA_DIR = mkdtempSync(join(tmpdir(), "chatty-"));
-let PORT = 0; // first start picks a free port, restarts reuse it
-let base, proc;
+const PORT = await new Promise((resolve) => {
+    const s = createServer().listen(0, () => {
+        const { port } = s.address();
+        s.close(() => resolve(port));
+    });
+});
+const base = `http://127.0.0.1:${PORT}`;
+let proc;
 
 async function startServer() {
-    proc = spawn(process.execPath, [new URL("server.mjs", import.meta.url).pathname], { env: { ...process.env, PORT, DATA_DIR } });
-    base = /http:\S+/.exec(await new Promise((resolve) => proc.stdout.once("data", resolve)))[0];
-    PORT = new URL(base).port;
+    const bin = new URL("node_modules/.bin/wrangler", import.meta.url).pathname;
+    proc = spawn(bin, ["dev", "--ip", "127.0.0.1", "--port", PORT, "--persist-to", DATA_DIR], {
+        cwd: new URL(".", import.meta.url).pathname,
+        env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
+        detached: true, // own process group, so stopping it also stops workerd
+    });
+    let out = "";
+    await new Promise((resolve, reject) => {
+        proc.stdout.on("data", (d) => (out += d) && /Ready on/.test(out) && resolve());
+        proc.stderr.on("data", (d) => (out += d));
+        proc.once("exit", () => reject(new Error(`wrangler dev exited:\n${out}`)));
+    });
 }
-const stopServer = () => new Promise((resolve) => proc.once("exit", resolve).kill());
+const stopServer = () => new Promise((resolve) => {
+    proc.once("exit", resolve);
+    process.kill(-proc.pid);
+});
 
 async function user() {
     const cookie = (await fetch(base)).headers.get("set-cookie").split(";")[0];
     const post = (path, body) => fetch(base + path, { method: "POST", headers: { cookie }, body: JSON.stringify(body ?? {}) });
-    let reader, buf = "";
-    const listen = async (lastEventId) => {
-        const headers = { cookie, ...(lastEventId && { "last-event-id": String(lastEventId) }) };
-        reader = (await fetch(`${base}/events`, { headers })).body.pipeThrough(new TextDecoderStream()).getReader();
-        buf = "";
-    };
+    let ws, inbox = [], waiting;
+    const listen = (after = 0) => new Promise((resolve, reject) => {
+        inbox = [];
+        ws = new WebSocket(`${base.replace("http", "ws")}/ws?after=${after}`, { headers: { cookie } });
+        ws.onopen = resolve;
+        ws.onerror = reject;
+        ws.onmessage = (e) => {
+            inbox.push(e.data === "pong" ? { type: "pong" } : JSON.parse(e.data));
+            waiting?.();
+        };
+    });
     const next = async () => {
-        for (;;) {
-            const i = buf.indexOf("\n\n");
-            if (i >= 0) {
-                const frame = buf.slice(0, i);
-                buf = buf.slice(i + 2);
-                const data = /^data: (.*)$/m.exec(frame)?.[1];
-                if (data) return JSON.parse(data);
-            } else buf += (await reader.read()).value;
-        }
+        while (!inbox.length) await new Promise((resolve) => (waiting = resolve));
+        return inbox.shift();
     };
-    return { cookie, post, listen, next, close: () => reader.cancel().catch(() => {}) };
+    return { cookie, post, listen, next, ping: () => ws.send("ping"), close: () => ws.close() };
 }
 
 try {
@@ -77,6 +95,12 @@ try {
     assert.equal(await (await fetch(base + url, { headers: { cookie: b.cookie } })).text(), "png-bytes");
     assert.equal((await fetch(base + url, { headers: { cookie: stranger.cookie } })).status, 404);
     assert.equal((await fetch(`${base}/api/upload?cid=x`, { method: "POST", headers: { cookie: a.cookie, "content-type": "image/svg+xml" }, body: "<svg/>" })).status, 409);
+    const big = await fetch(`${base}/api/upload?cid=big`, { method: "POST", headers: { cookie: a.cookie, "content-type": "image/png" }, body: new Uint8Array(2 * 1024 * 1024) });
+    assert.equal(big.status, 413);
+
+    // Keep-alive pings get answered.
+    a.ping();
+    assert.equal((await a.next()).type, "pong");
 
     // Server goes down. b keeps writing; the message is only accepted once it's back.
     const lastSeenByA = got.msg.id + 1; // the image
@@ -86,7 +110,7 @@ try {
     await startServer();
     await b.post("/api/send", { cid: "c3", text: "you there?" });
 
-    // a reconnects with Last-Event-ID and gets exactly what it missed; a fresh page load gets the whole history.
+    // a reconnects asking for what came after the last message it saw, and gets exactly that; a fresh page load gets the whole history.
     await a.listen(lastSeenByA);
     const resumed = await a.next();
     assert.deepEqual([resumed.state, resumed.reset, resumed.messages.map((m) => m.text)], ["chat", false, ["you there?"]]);
@@ -114,6 +138,6 @@ try {
     for (const u of [a, b, stranger]) u.close();
     console.log("chatty self-check passed");
 } finally {
-    proc?.kill();
+    if (proc?.exitCode === null) process.kill(-proc.pid);
     rmSync(DATA_DIR, { recursive: true, force: true });
 }

@@ -184,7 +184,7 @@
     };
 
     let me = null, convo = null, msgs = [], hasMore = false, delivered = 0, partnerLeft = false;
-    let lastId = 0, deliveredSent = 0, unread = 0, lastTyping = 0, typingTimer, es;
+    let lastId = 0, deliveredSent = 0, unread = 0, lastTyping = 0, typingTimer;
     // Messages not yet confirmed by the server. Text survives reloads; images/voice live until the tab closes.
     let pending = store.get(PENDING_KEY, []);
     const savePending = () => store.set(PENDING_KEY, pending.filter((p) => !p.blob));
@@ -193,17 +193,34 @@
 
     // ---------- connection ----------
 
+    // Like WooTalk: when the connection drops, retry every 1.5 s and ask only for what was missed.
+    let ws, retryTimer, pongTimer;
     function connect() {
-        es?.close();
-        es = new EventSource(lastId ? `/events?after=${lastId}` : "/events");
-        es.onopen = () => setOnline(true);
-        es.onmessage = (e) => handle(JSON.parse(e.data));
-        es.onerror = () => {
+        clearTimeout(retryTimer);
+        clearTimeout(pongTimer);
+        ws?.close();
+        const sock = (ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?after=${lastId}`));
+        sock.onopen = () => setOnline(true);
+        sock.onmessage = (e) => {
+            clearTimeout(pongTimer);
+            if (e.data !== "pong") handle(JSON.parse(e.data));
+        };
+        sock.onclose = () => {
+            if (sock !== ws) return; // already replaced by a newer connection
             setOnline(false);
-            if (es.readyState === EventSource.CLOSED) setTimeout(connect, 2000); // e.g. a proxy answered 502
+            retryTimer = setTimeout(connect, 1500);
         };
     }
-    const reconnectIfNeeded = () => es?.readyState !== EventSource.OPEN && connect();
+    // Phones often keep a dead connection that still looks open; a ping nobody answers exposes it.
+    function checkAlive() {
+        if (ws?.readyState === WebSocket.CONNECTING) return;
+        if (ws?.readyState !== WebSocket.OPEN) return connect();
+        ws.send("ping");
+        clearTimeout(pongTimer);
+        pongTimer = setTimeout(connect, 5000);
+    }
+    setInterval(checkAlive, 25000);
+    const reconnectIfNeeded = checkAlive;
     addEventListener("online", reconnectIfNeeded);
     document.addEventListener("visibilitychange", () => {
         if (document.hidden) return;
@@ -502,9 +519,25 @@
         }
     });
 
-    function sendImage(file) {
+    // Photos are shrunk before upload: Cloudflare stores at most about 2 MB per item.
+    async function shrink(file) {
+        if (file.type === "image/gif" && file.size < 1.9e6) return file;
+        const img = await createImageBitmap(file);
+        const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const g = canvas.getContext("2d");
+        g.fillStyle = "#fff"; // transparent PNGs would otherwise turn black as JPEG
+        g.fillRect(0, 0, canvas.width, canvas.height);
+        g.drawImage(img, 0, 0, canvas.width, canvas.height);
+        return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+    }
+    async function sendImage(file) {
         if (!file?.type.startsWith("image/") || !convo) return;
-        queue({ type: "image", blob: file, local: URL.createObjectURL(file) });
+        const blob = await shrink(file).catch(() => file);
+        if (!blob || blob.size > 1.9e6) return alert("圖片太大了");
+        queue({ type: "image", blob, local: URL.createObjectURL(blob) });
     }
     $("imageBtn").onclick = () => $("file").click();
     $("file").onchange = () => {
@@ -541,7 +574,7 @@
         };
         recorder.start();
         $("micBtn").classList.add("recording");
-        setTimeout(() => recorder?.state === "recording" && recorder.stop(), 120000);
+        setTimeout(() => recorder?.state === "recording" && recorder.stop(), 60000); // keeps a clip under the ~2 MB storage limit
     };
 
     // Leaving. Like WooTalk, a long chat needs "leave" typed out so it can't be ended by accident.
