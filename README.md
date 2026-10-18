@@ -8,7 +8,8 @@ A small anonymous 1-on-1 chat in the spirit of [WooTalk 吾聊](https://wootalk.
 - **The conversation survives everything except 離開**: network drops, reloads, closing the tab, rebooting, and redeploys. Your browser keeps a cookie that identifies you, and every message is stored in Cloudflare (a Durable Object's database). A dropped connection retries every 1.5 seconds and fetches only what it missed.
 - **Messages typed while offline aren't lost**: they show as 傳送中… and go out automatically once the connection is back, even after a reload.
 - **On another device**: 設定 → 在其他裝置繼續這段對話 copies a link that opens the same conversation in another browser. Use it if you switch phones, or before clearing cookies or using private browsing (these lose the cookie, just like on WooTalk).
-- Text with clickable links, images (picker or paste; shrunk to 1280 px before upload), and voice messages up to 60 seconds.
+- Text with clickable links, and images (picker or paste; shrunk to 1280 px before upload).
+- **Voice messages** up to 1 minute: tap the mic and a recording bar replaces the text box, with a timer, a live level meter, 🗑 to discard and a send button (Enter / Esc on a computer). The timer turns red for the last 10 seconds, and the clip sends itself at 1:00.
 - **Emoji reactions** (👍 ❤️ 😂 😮 😢 🙏): long-press a message on a phone, or hover / right-click it on a computer. One per person per message; tap yours again to remove it. Long-press also offers 複製 (copy) for text.
 - **The other person's status** next to their name: 🟢 線上 while they're using the page; 🟠 待機 after 10 minutes without activity, or when they switch to another tab on a computer; ⚪ 已離線 when they close the page or put their phone on the home screen. If a phone loses signal without closing anything, it shows 已離線 within about 2 minutes.
 - 對方正在輸入… typing indicator, 已送出 / 已送達 (delivered to their device, not "read").

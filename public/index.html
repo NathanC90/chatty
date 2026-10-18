@@ -99,6 +99,16 @@
     .composer textarea:focus { border-color: var(--accent); }
     .send { color: var(--accent); }
     .recording { color: var(--danger) !important; animation: pulse 1s ease-in-out infinite; }
+    /* While recording, a bar replaces the text box: cancel · timer · level meter · send */
+    .recbar { display: none; flex: 1; min-width: 0; align-items: center; gap: 8px; }
+    .composer.rec > :not(.recbar) { display: none; }
+    .composer.rec .recbar { display: flex; }
+    .recdot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--danger); animation: pulse 1s ease-in-out infinite; }
+    #recTime { font-weight: 600; font-variant-numeric: tabular-nums; }
+    #recTime.warn { color: var(--danger); }
+    .rechint { color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+    .wave { flex: 1; min-width: 0; height: 28px; display: flex; align-items: center; justify-content: flex-end; gap: 2px; overflow: hidden; }
+    .wave i { flex: none; width: 3px; height: 12%; border-radius: 2px; background: var(--accent); transition: height 0.1s; }
     @keyframes pulse { 50% { opacity: 0.4; } }
     .ended { display: flex; gap: 8px; justify-content: center; align-items: center; flex-wrap: wrap; padding: 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); color: var(--muted); }
 
@@ -149,6 +159,13 @@
             <textarea id="text" rows="1" maxlength="2000" placeholder="輸入訊息" aria-label="訊息"></textarea>
             <button class="icon send" aria-label="傳送"><svg viewBox="0 0 24 24"><path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z"/></svg></button>
             <input type="file" id="file" accept="image/*" hidden>
+            <div class="recbar" role="group" aria-label="錄音中">
+                <button type="button" class="icon" id="recCancel" aria-label="取消錄音" title="取消（Esc）"><svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>
+                <span class="recdot" aria-hidden="true"></span>
+                <span id="recTime" aria-live="off">0:00</span><span class="rechint">/ 1:00</span>
+                <div class="wave" id="wave" aria-hidden="true"></div>
+                <button type="button" class="icon send" id="recSend" aria-label="送出語音" title="送出（Enter）"><svg viewBox="0 0 24 24"><path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z"/></svg></button>
+            </div>
         </form>
         <div class="ended" id="ended" hidden>
             <span>對方已離開</span>
@@ -466,7 +483,7 @@
             const btn = el("button", "voice");
             btn.type = "button";
             btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
-            btn.append(`語音 ${Math.round(m.duration || 0)} 秒`);
+            btn.append(`語音 ${clock(m.duration || 0)}`);
             if (m.url) btn.onclick = () => playVoice(m.url, btn);
             b.append(btn);
         } else b.append(linkify(m.text));
@@ -726,30 +743,83 @@
         }
     });
 
-    let recorder;
+    // ---------- voice messages ----------
+    // Tapping the mic swaps the text box for a recording bar: a timer, a live level meter, a trash
+    // can to discard and a send button. At 60 s (to stay under the ~2 MB storage limit) it sends itself.
+
+    const MAX_REC = 60;
+    const clock = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
+    let rec = null;
+
     $("micBtn").onclick = async () => {
-        if (recorder) return recorder.stop();
+        if (rec) return;
         if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return alert("這個瀏覽器（或非 HTTPS 連線）無法錄音");
         let stream;
         try {
             stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         } catch {
-            return alert("無法使用麥克風");
+            return alert("無法使用麥克風，請在瀏覽器設定中允許 Chatty 使用麥克風");
         }
-        const chunks = [], started = Date.now();
-        recorder = new MediaRecorder(stream);
-        recorder.ondataavailable = (e) => chunks.push(e.data);
-        recorder.onstop = () => {
+        const r = (rec = { recorder: new MediaRecorder(stream), chunks: [], started: Date.now(), send: false });
+        r.recorder.ondataavailable = (e) => r.chunks.push(e.data);
+        r.recorder.onstop = () => {
             stream.getTracks().forEach((t) => t.stop());
-            $("micBtn").classList.remove("recording");
-            const blob = new Blob(chunks, { type: recorder.mimeType.split(";")[0] });
-            recorder = null;
-            if (blob.size && convo) queue({ type: "audio", blob, duration: (Date.now() - started) / 1000 });
+            clearInterval(r.timer);
+            r.meter?.close().catch(() => {});
+            $("composer").classList.remove("rec");
+            rec = null;
+            const blob = new Blob(r.chunks, { type: r.recorder.mimeType.split(";")[0] });
+            if (r.send && blob.size && convo && r.duration >= 0.5) queue({ type: "audio", blob, duration: r.duration });
         };
-        recorder.start();
-        $("micBtn").classList.add("recording");
-        setTimeout(() => recorder?.state === "recording" && recorder.stop(), 60000); // keeps a clip under the ~2 MB storage limit
+
+        // Level meter: bars scroll in from the right, taller when louder.
+        let level = () => 0;
+        try {
+            r.meter = new AudioContext();
+            r.meter.resume();
+            const analyser = r.meter.createAnalyser();
+            r.meter.createMediaStreamSource(stream).connect(analyser);
+            const buf = new Uint8Array(analyser.fftSize);
+            level = () => {
+                analyser.getByteTimeDomainData(buf);
+                let sum = 0;
+                for (const v of buf) sum += (v - 128) ** 2;
+                return Math.min(1, Math.sqrt(sum / buf.length) / 32);
+            };
+        } catch {}
+        $("wave").replaceChildren(...Array.from({ length: 40 }, () => el("i")));
+        const tick = () => {
+            const sec = (Date.now() - r.started) / 1000;
+            $("recTime").textContent = clock(sec);
+            $("recTime").classList.toggle("warn", sec >= MAX_REC - 10);
+            const bar = $("wave").firstElementChild;
+            bar.style.height = `${12 + level() * 88}%`;
+            $("wave").append(bar);
+            if (sec >= MAX_REC) stopRecording(true);
+        };
+        r.timer = setInterval(tick, 100);
+        tick();
+        r.recorder.start();
+        $("composer").classList.add("rec");
+        $("recSend").focus();
     };
+
+    function stopRecording(send) {
+        if (rec?.recorder.state !== "recording") return;
+        rec.send = send;
+        rec.duration = Math.min(MAX_REC, (Date.now() - rec.started) / 1000);
+        rec.recorder.stop();
+    }
+    $("recSend").onclick = () => stopRecording(true);
+    $("recCancel").onclick = () => stopRecording(false);
+    document.addEventListener("keydown", (e) => {
+        if (!rec) return;
+        if (e.key === "Escape") stopRecording(false);
+        if (e.key === "Enter") {
+            e.preventDefault();
+            stopRecording(true);
+        }
+    });
 
     // Leaving. Like WooTalk, a long chat needs "leave" typed out so it can't be ended by accident.
     $("leaveBtn").onclick = () => {
