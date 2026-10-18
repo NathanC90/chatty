@@ -17,10 +17,11 @@ const PORT = await new Promise((resolve) => {
 });
 const base = `http://127.0.0.1:${PORT}`;
 let proc;
+const STORAGE_LIMIT = 3_000_000; // tiny, so the test can fill it
 
 async function startServer() {
     const bin = new URL("node_modules/.bin/wrangler", import.meta.url).pathname;
-    proc = spawn(bin, ["dev", "--ip", "127.0.0.1", "--port", PORT, "--persist-to", DATA_DIR], {
+    proc = spawn(bin, ["dev", "--ip", "127.0.0.1", "--port", PORT, "--persist-to", DATA_DIR, "--var", `STORAGE_LIMIT:${STORAGE_LIMIT}`], {
         cwd: new URL(".", import.meta.url).pathname,
         env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
         detached: true, // own process group, so stopping it also stops workerd
@@ -109,12 +110,34 @@ try {
     const big = await fetch(`${base}/api/upload?cid=big`, { method: "POST", headers: { cookie: a.cookie, "content-type": "image/png" }, body: new Uint8Array(2 * 1024 * 1024) });
     assert.equal(big.status, 413);
 
+    // Storage: near the limit, the oldest photos and voice clips are deleted to make room.
+    // Their messages stay (without a file, shown as expired); text is never touched.
+    const upload = (cid) => fetch(`${base}/api/upload?cid=${cid}`, { method: "POST", headers: { cookie: a.cookie, "content-type": "image/jpeg" }, body: new Uint8Array(1_000_000) });
+    const both = async (n) => {
+        const seen = [];
+        for (let i = 0; i < n; i++) seen.push(await a.next());
+        for (let i = 0; i < n; i++) await b.next();
+        return seen;
+    };
+    assert.equal((await upload("p1")).status, 204);
+    const [p1] = await both(1);
+    assert.equal((await upload("p2")).status, 204);
+    await both(1);
+    assert.equal((await upload("p3")).status, 204); // 3 MB would pass 90%: the two oldest images go
+    const [gone1, gone2, p3] = await both(3);
+    assert.deepEqual([gone1.msg.id, gone1.msg.url], [got.msg.id + 1, undefined]);
+    assert.deepEqual([gone2.msg.id, gone2.msg.url, gone2.msg.type], [p1.msg.id, undefined, "image"]);
+    assert.ok(p3.msg.url);
+    assert.equal((await fetch(base + p1.msg.url, { headers: { cookie: a.cookie } })).status, 404);
+    const usage = await (await fetch(`${base}/api/usage`, { headers: { cookie: a.cookie } })).json();
+    assert.ok(usage.limit === STORAGE_LIMIT && usage.used > 2_000_000 && usage.used < 2_400_000, JSON.stringify(usage));
+
     // Keep-alive pings get answered.
     a.ping();
     assert.equal((await a.next()).type, "pong");
 
     // Server goes down. b keeps writing; the message is only accepted once it's back.
-    const lastSeenByA = got.msg.id + 1; // the image
+    const lastSeenByA = p3.msg.id;
     a.close(); b.close();
     await stopServer();
     await assert.rejects(b.post("/api/send", { cid: "c3", text: "you there?" }));
@@ -129,7 +152,7 @@ try {
     assert.deepEqual(resumed.reactions[got.msg.id], { mine: "👍", theirs: null }); // the removal catches up too
     await b.listen();
     const reload = await b.next();
-    assert.deepEqual(reload.messages.map((m) => m.text ?? m.type), ["hello", "image", "you there?"]);
+    assert.deepEqual(reload.messages.map((m) => m.text ?? m.type), ["hello", "image", "image", "image", "image", "you there?"]);
     assert.equal(reload.delivered, 0); // a hasn't confirmed b's message yet
 
     // Same identity in another browser via the resume link.

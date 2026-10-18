@@ -75,6 +75,9 @@
         .bubble[data-id] { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
     }
     .reacts { position: relative; margin: -6px 8px 0; padding: 1px 7px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 0.85rem; line-height: 1.5; box-shadow: 0 1px 3px rgb(0 0 0 / 0.12); }
+    .expired { font-style: italic; opacity: 0.75; }
+    .meter { width: 100%; height: 6px; margin-top: 8px; border-radius: 3px; background: var(--them); overflow: hidden; }
+    .meter i { display: block; width: 0; height: 100%; background: var(--accent); }
     .picker { position: fixed; z-index: 10; display: flex; align-items: center; padding: 4px; border: 1px solid var(--line); border-radius: 26px; background: var(--surface); box-shadow: 0 8px 30px rgb(0 0 0 / 0.2); }
     .picker #emojis { display: flex; }
     .picker #emojis button { width: 42px; height: 42px; border-radius: 50%; font-size: 1.45rem; transition: transform 0.12s; }
@@ -134,6 +137,7 @@
             <button class="icon" id="menuBtn" aria-label="設定"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
         </header>
         <div class="banner" id="offline" hidden>連線中…訊息會在恢復連線後送出</div>
+        <div class="banner" id="storageWarn" hidden>儲存空間快滿了：之後會自動刪除最舊的照片和語音（文字和表情不受影響）</div>
         <div id="log" aria-live="polite"></div>
         <div id="typing"></div>
         <form class="composer" id="composer">
@@ -192,6 +196,8 @@
     <form method="dialog">
         <h2>設定</h2>
         <label class="menu-item">新訊息音效提醒 <input type="checkbox" id="soundToggle"></label>
+        <div class="menu-item" style="flex-wrap: wrap">儲存空間 <span class="sub" id="usageText">…</span><div class="meter"><i id="usageBar"></i></div></div>
+        <p style="font-size: 0.8rem">快滿時會自動刪除最舊的照片和語音，文字和表情都會保留。</p>
         <button type="button" class="menu-item" id="copyResume">在其他裝置繼續這段對話 <span>複製連結</span></button>
         <p style="font-size: 0.8rem">拿到這個連結的人就能以你的身分聊天，只給你自己用。</p>
         <div class="actions"><button class="primary" value="close">完成</button></div>
@@ -286,9 +292,11 @@
             for (const m of msgs) m.reactions = d.reactions?.[m.id] ?? m.reactions;
             show("chat");
             merge(d.messages, true);
+            refreshUsage();
             flushPending();
         } else if (d.type === "msg" && convo) {
             const m = d.msg, old = msgs.find((x) => x.id === m.id);
+            if (m.url || old?.url) refreshUsage(); // a photo or voice clip arrived or expired
             if (old) {
                 // Same message again: a reaction changed.
                 if (m.reactions?.theirs && m.reactions.theirs !== old.reactions?.theirs) notify();
@@ -335,7 +343,8 @@
                 const res = p.blob
                     ? await post(`/api/upload?cid=${p.cid}&duration=${p.duration || 0}`, p.blob, { "Content-Type": p.blob.type })
                     : await post("/api/send", { cid: p.cid, text: p.text });
-                if (res.status >= 400 && res.status < 500) {
+                if (res.status === 507) alert("儲存空間已滿，這個檔案傳不出去");
+                if ((res.status >= 400 && res.status < 500) || res.status === 507) {
                     pending = pending.filter((x) => x !== p); // rejected for good (e.g. chat ended)
                     savePending();
                     render();
@@ -411,7 +420,10 @@
 
     function content(m) {
         const b = el("div", "bubble");
-        if (m.type === "image") {
+        const expiredLabel = m.type === "image" ? "圖片已過期" : "語音已過期";
+        if ((m.type === "image" || m.type === "audio") && !m.url && !m.blob) {
+            b.append(el("span", "expired", expiredLabel)); // removed to free up storage
+        } else if (m.type === "image") {
             b.classList.add("media");
             const a = el("a");
             a.href = m.url || m.local;
@@ -421,6 +433,11 @@
             img.alt = "圖片";
             img.loading = "lazy";
             img.onload = () => nearBottom() && scrollDown();
+            img.onerror = () => {
+                if (!m.url) return;
+                b.classList.remove("media");
+                b.replaceChildren(el("span", "expired", expiredLabel));
+            };
             a.append(img);
             b.append(a);
         } else if (m.type === "audio") {
@@ -657,7 +674,7 @@
     async function shrink(file) {
         if (file.type === "image/gif" && file.size < 1.9e6) return file;
         const img = await createImageBitmap(file);
-        const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+        const scale = Math.min(1, 1280 / Math.max(img.width, img.height));
         const canvas = document.createElement("canvas");
         canvas.width = Math.round(img.width * scale);
         canvas.height = Math.round(img.height * scale);
@@ -665,7 +682,7 @@
         g.fillStyle = "#fff"; // transparent PNGs would otherwise turn black as JPEG
         g.fillRect(0, 0, canvas.width, canvas.height);
         g.drawImage(img, 0, 0, canvas.width, canvas.height);
-        return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+        return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.8));
     }
     async function sendImage(file) {
         if (!file?.type.startsWith("image/") || !convo) return;
@@ -746,7 +763,21 @@
     };
     $("reportDialog").onclose = () => $("reportDialog").returnValue === "report" && post("/api/report", { reasons: reasons() });
 
+    // ---------- storage ----------
+
+    const fmt = (n) => (n >= 1024 ** 3 ? `${+(n / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1024 ** 2))} MB`);
+    async function refreshUsage() {
+        try {
+            const { used, limit } = await (await fetch("/api/usage")).json();
+            const pct = Math.min(100, (used / limit) * 100);
+            $("usageText").textContent = `約 ${fmt(used)}／${fmt(limit)}（${Math.round(pct)}%）`;
+            $("usageBar").style.width = `${pct}%`;
+            $("storageWarn").hidden = pct < 70; // auto-deleting starts at 90%
+        } catch {}
+    }
+
     $("menuBtn").onclick = () => {
+        refreshUsage();
         $("soundToggle").checked = store.get("chatty.sound", true);
         $("menuDialog").showModal();
     };

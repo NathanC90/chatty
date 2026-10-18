@@ -9,6 +9,8 @@ import { DurableObject } from "cloudflare:workers";
 const PAGE = 100; // messages per history page
 const MAX_TEXT = 2000;
 const MAX_UPLOAD = 1.9 * 1024 * 1024; // one SQLite row holds at most 2 MB
+// The smallest per-object storage limit Cloudflare's free-plan docs mention. Overridable for tests.
+const STORAGE_LIMIT = 1024 ** 3;
 const EMOJI = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 const TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp", "audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg"];
 
@@ -38,6 +40,7 @@ export class Chat extends DurableObject {
     constructor(ctx, env) {
         super(ctx, env);
         this.sql = ctx.storage.sql;
+        this.limit = Number(env.STORAGE_LIMIT) || STORAGE_LIMIT;
         this.sql.exec(`
             CREATE TABLE IF NOT EXISTS users (uid TEXT PRIMARY KEY, convo TEXT, waiting TEXT);
             CREATE TABLE IF NOT EXISTS convos (id TEXT PRIMARY KEY, key TEXT, a TEXT, b TEXT, delivered_a INTEGER DEFAULT 0, delivered_b INTEGER DEFAULT 0);
@@ -135,6 +138,28 @@ export class Chat extends DurableObject {
         this.emit(uid, this.snapshot(uid));
     }
 
+    // Roughly what's stored: uploads plus a little per message.
+    usage() {
+        const { used } = this.row(`SELECT (SELECT COALESCE(SUM(length(data)), 0) FROM files)
+            + (SELECT COALESCE(SUM(length(text)), 0) + COUNT(*) * 200 FROM messages) AS used`);
+        return { used, limit: this.limit };
+    }
+
+    // Before an upload would bring storage near the limit, delete the oldest photos and voice clips.
+    // Their messages stay and show as expired; text and reactions are never deleted.
+    makeRoom(size) {
+        let { used } = this.usage();
+        if (used + size <= this.limit * 0.9) return;
+        for (const f of this.rows("SELECT id, convo, length(data) AS size FROM files ORDER BY rowid")) {
+            if (used + size <= this.limit * 0.8) break;
+            this.sql.exec("DELETE FROM files WHERE id = ?", f.id);
+            used -= f.size;
+            const m = this.row("UPDATE messages SET file = NULL WHERE file = ? RETURNING *", f.id);
+            const c = this.convo(f.convo);
+            if (m && c) this.broadcast(c, m);
+        }
+    }
+
     leave(uid) {
         const c = this.convo(this.user(uid).convo);
         this.sql.exec("UPDATE users SET waiting = NULL, convo = NULL WHERE uid = ?", uid);
@@ -176,6 +201,8 @@ export class Chat extends DurableObject {
             return Response.json({ messages: older.slice(0, PAGE).reverse().map((m) => this.view(m, uid)), hasMore: older.length > PAGE });
         }
 
+        if (req.method === "GET" && path === "/api/usage") return Response.json(this.usage());
+
         if (req.method !== "POST") return empty(404);
         const isDuplicate = (cid) => !!this.row("SELECT 1 FROM messages WHERE convo = ? AND sender = ? AND cid = ?", c.id, uid, cid);
 
@@ -186,6 +213,8 @@ export class Chat extends DurableObject {
             if (isDuplicate(cid)) return empty(204);
             const data = await req.arrayBuffer();
             if (!data.byteLength || data.byteLength > MAX_UPLOAD) return empty(413);
+            this.makeRoom(data.byteLength);
+            if (this.usage().used + data.byteLength > this.limit) return empty(507);
             const file = hex();
             this.sql.exec("INSERT INTO files (id, convo, mime, data) VALUES (?, ?, ?, ?)", file, c.id, type, data);
             this.addMessage(c, uid, {

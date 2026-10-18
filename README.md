@@ -8,7 +8,7 @@ A small anonymous 1-on-1 chat in the spirit of [WooTalk 吾聊](https://wootalk.
 - **The conversation survives everything except 離開**: network drops, reloads, closing the tab, rebooting, and redeploys. Your browser keeps a cookie that identifies you, and every message is stored in Cloudflare (a Durable Object's database). A dropped connection retries every 1.5 seconds and fetches only what it missed.
 - **Messages typed while offline aren't lost**: they show as 傳送中… and go out automatically once the connection is back, even after a reload.
 - **On another device**: 設定 → 在其他裝置繼續這段對話 copies a link that opens the same conversation in another browser. Use it if you switch phones, or before clearing cookies or using private browsing (these lose the cookie, just like on WooTalk).
-- Text with clickable links, images (picker or paste; shrunk before upload), and voice messages up to 60 seconds.
+- Text with clickable links, images (picker or paste; shrunk to 1280 px before upload), and voice messages up to 60 seconds.
 - **Emoji reactions** (👍 ❤️ 😂 😮 😢 🙏): long-press a message on a phone, or hover / right-click it on a computer. One per person per message; tap yours again to remove it. Long-press also offers 複製 (copy) for text.
 - 對方正在輸入… typing indicator, 已送出 / 已送達 (delivered to their device, not "read").
 - Times, 今日 / 昨日 date dividers, and 載入更早的訊息 for long histories.
@@ -43,6 +43,8 @@ To update later: `git pull`, then `npm run deploy`. Redeploying keeps all conver
 ### Staying free
 
 On the free plan, going over a limit makes requests fail until the daily reset (00:00 UTC). You are never charged. Two people chatting use a tiny fraction of the allowance (about 100,000 requests per day).
+
+Storage is the one limit you could reach. Cloudflare's docs mention 5 GB per account but also 1 GB per Durable Object on the free plan, and Chatty keeps everything in one, so it assumes 1 GB: roughly 3,000–5,000 photos. 設定 shows how much is used, and a notice appears at 70%. From 90%, each new upload first deletes the oldest photos and voice clips (down to 80%). Their messages stay and show 圖片已過期 / 語音已過期; text and reactions are never deleted.
 
 ## Developing
 
