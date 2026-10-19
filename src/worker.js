@@ -15,7 +15,7 @@ const PRESENCE = ["offline", "idle", "online"]; // worst to best
 // The page pings every 25 s, but browsers slow timers in background tabs to about once a minute,
 // so a socket only counts as gone after 3 silent minutes. Overridable for tests.
 const STALE_MS = 180_000;
-const EMOJI = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+const EMOJI = ["😘", "😡", "👍", "❤️", "🤮", "😂", "🙈", "🥹", "🥳", "😎", "😮", "😢", "🙏"];
 // Reporting a message is a joke between friends: the "judge" hands down a random penalty.
 const PENALTIES = [
     "罰請對方喝一杯珍奶 🧋", "罰講一個更好笑的笑話 🎤", "罰傳一張醜照 🤳", "罰用語音唱一句歌 🎶",

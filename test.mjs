@@ -103,6 +103,10 @@ try {
     await a.next(), await b.next(), await a.next();
     assert.deepEqual((await b.next()).msg.reactions, { mine: "❤️", theirs: "👍" });
     assert.equal((await b.post("/api/react", { id: got.msg.id, emoji: "💩" })).status, 400);
+    assert.equal((await b.post("/api/react", { id: got.msg.id, emoji: "🥹" })).status, 204); // one of the added ones
+    await a.next(), await b.next();
+    await b.post("/api/react", { id: got.msg.id, emoji: "❤️" }); // back to ❤️ for the checks below
+    await a.next(), await b.next();
     assert.equal((await b.post("/api/react", { id: 999999, emoji: "👍" })).status, 400);
 
     // Replies quote the message they answer; a message from elsewhere is ignored.

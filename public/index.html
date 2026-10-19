@@ -101,7 +101,7 @@
     .viewer-bar { position: fixed; top: max(8px, env(safe-area-inset-top)); right: 8px; display: flex; gap: 4px; }
     .viewer .icon, .viewer .icon:hover { color: #fff; background: rgb(255 255 255 / 0.12); }
     .picker { position: fixed; z-index: 10; display: flex; flex-direction: column; padding: 4px; border: 1px solid var(--line); border-radius: 22px; background: var(--surface); box-shadow: 0 8px 30px rgb(0 0 0 / 0.2); }
-    .picker #emojis { display: flex; }
+    .picker #emojis { display: grid; grid-template-columns: repeat(7, 42px); justify-content: center; } /* 13 emoji: two rows */
     .picker #emojis button { width: 42px; height: 42px; border-radius: 50%; font-size: 1.45rem; transition: transform 0.12s; }
     .picker #emojis button:hover { transform: scale(1.2); }
     .picker #emojis button.selected { background: var(--them); }
@@ -826,7 +826,7 @@
     // ---------- reactions ----------
     // Long-press a message (phone), or hover / right-click it (computer). One per person; tap yours again to remove it.
 
-    const EMOJI = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+    const EMOJI = ["😘", "😡", "👍", "❤️", "🤮", "😂", "🙈", "🥹", "🥳", "😎", "😮", "😢", "🙏"];
     const picker = $("picker");
     let pickerFor = null;
     for (const e of EMOJI) {
