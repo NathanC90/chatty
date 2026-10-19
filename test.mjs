@@ -111,7 +111,8 @@ try {
     await b.next();
     assert.deepEqual(reply.replyTo, { id: got.msg.id, mine: true, type: "text", text: "hello", duration: 0 });
     await b.post("/api/send", { cid: "r2", text: "x", reply: 999999 });
-    assert.equal((await a.next()).msg.replyTo, undefined);
+    const x = (await a.next()).msg;
+    assert.equal(x.replyTo, undefined);
     await b.next();
     // Unsending: only your own messages; the content is gone for both, and it can't be reacted to.
     assert.equal((await a.post("/api/unsend", { id: reply.id })).status, 400);
@@ -120,6 +121,26 @@ try {
     await b.next();
     assert.deepEqual([gone.id, gone.type, gone.text], [reply.id, "unsent", undefined]);
     assert.equal((await b.post("/api/react", { id: reply.id, emoji: "👍" })).status, 400);
+
+    // 🚨 Tickets (a joke): one per message with a random penalty; only the accused may appeal, once.
+    await b.post("/api/ticket", { id: got.msg.id, reason: "🥶 冷笑話" });
+    const ticketed = (await a.next()).msg;
+    await b.next();
+    assert.deepEqual([ticketed.ticket.reason, ticketed.ticket.byMe, ticketed.ticket.confession, ticketed.ticket.appeal], ["🥶 冷笑話", false, false, null]);
+    assert.ok(ticketed.ticket.penalty);
+    assert.equal((await b.post("/api/ticket", { id: got.msg.id, reason: "again" })).status, 409);
+    assert.equal((await b.post("/api/ticket", { id: x.id, reason: "  " })).status, 400);
+    assert.equal((await b.post("/api/appeal", { id: got.msg.id })).status, 400); // not b's to appeal
+    await a.post("/api/appeal", { id: got.msg.id });
+    const verdict = (await a.next()).msg;
+    await b.next();
+    assert.ok(verdict.ticket === null || verdict.ticket.appeal === "rejected", JSON.stringify(verdict.ticket));
+    assert.equal((await a.post("/api/appeal", { id: got.msg.id })).status, 400); // once
+    // Reporting your own message is a confession, which can't be appealed.
+    await b.post("/api/ticket", { id: x.id, reason: "自首" });
+    assert.equal((await a.next()).msg.ticket.confession, true);
+    await b.next();
+    assert.equal((await b.post("/api/appeal", { id: x.id })).status, 400);
 
     // Images: stored, served only to the two people in the chat.
     const img = await fetch(`${base}/api/upload?cid=i1`, { method: "POST", headers: { cookie: a.cookie, "content-type": "image/png" }, body: "png-bytes" });
@@ -207,6 +228,7 @@ try {
     assert.deepEqual([resumed.state, resumed.reset, resumed.messages.map((m) => m.text)], ["chat", false, ["you there?"]]);
     assert.deepEqual(resumed.reactions[got.msg.id], { mine: "👍", theirs: null }); // the removal catches up too
     assert.deepEqual(resumed.unsent, [reply.id, u1.msg.id]); // and so do unsent messages
+    assert.deepEqual(resumed.tickets[got.msg.id], verdict.ticket); // and tickets, even thrown-out ones
     await b.listen();
     const reload = await b.next();
     assert.deepEqual(reload.messages.map((m) => m.text ?? m.type), ["hello", "unsent", "x", "image", "image", "image", "image", "unsent", "you there?"]);

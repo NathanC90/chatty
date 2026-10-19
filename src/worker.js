@@ -16,6 +16,14 @@ const PRESENCE = ["offline", "idle", "online"]; // worst to best
 // so a socket only counts as gone after 3 silent minutes. Overridable for tests.
 const STALE_MS = 180_000;
 const EMOJI = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+// Reporting a message is a joke between friends: the "judge" hands down a random penalty.
+const PENALTIES = [
+    "罰請對方喝一杯珍奶 🧋", "罰講一個更好笑的笑話 🎤", "罰傳一張醜照 🤳", "罰用語音唱一句歌 🎶",
+    "罰誇對方三句 💐", "罰今天早點睡 😴", "罰下次吃飯你請 🍜", "罰學貓叫一聲（要錄音）🐱",
+];
+const CONFESSION_PENALTIES = ["從輕量刑：罰喝一杯水 💧", "從輕量刑：罰對自己說聲加油 💪", "自首有功，緩刑一天 ⚖️"];
+const APPEAL_ODDS = 0.35; // chance an appeal gets the ticket thrown out
+const pick = (list) => list[Math.floor(Math.random() * list.length)];
 const TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp", "audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg"];
 
 const cookieUid = (req) => /(?:^|;\s*)uid=([0-9a-f-]{36})/.exec(req.headers.get("Cookie") || "")?.[1];
@@ -57,7 +65,8 @@ export class Chat extends DurableObject {
         `);
         // Columns added after launch: existing databases get them, their messages are kept.
         const columns = this.sql.exec("SELECT * FROM messages LIMIT 0").columnNames;
-        for (const [name, type] of [["reactions", "TEXT"], ["reply_to", "INTEGER"]]) { // reactions: JSON { uid: emoji }
+        for (const [name, type] of [["reactions", "TEXT"], ["reply_to", "INTEGER"], ["ticket", "TEXT"]]) {
+            // reactions: JSON { uid: emoji }; ticket: JSON { by, reason, penalty, appeal }, or "null" once thrown out
             if (!columns.includes(name)) this.sql.exec(`ALTER TABLE messages ADD COLUMN ${name} ${type}`);
         }
         // Answers the page's keep-alive pings without waking this object up.
@@ -98,8 +107,13 @@ export class Chat extends DurableObject {
     view = (m, uid) => ({
         id: m.id, type: m.type, text: m.text ?? undefined, cid: m.cid, time: m.time, duration: m.duration,
         mobile: !!m.mobile, mine: m.sender === uid, url: m.file ? `/uploads/${m.convo}/${m.file}` : undefined,
-        reactions: this.reactionsOf(m, uid), replyTo: this.quoteOf(m.reply_to, uid),
+        reactions: this.reactionsOf(m, uid), replyTo: this.quoteOf(m.reply_to, uid), ticket: this.ticketOf(m, uid),
     });
+
+    ticketOf(m, uid) {
+        const t = JSON.parse(m.ticket || "null");
+        return t && { reason: t.reason, penalty: t.penalty, appeal: t.appeal ?? null, confession: t.by === m.sender, byMe: t.by === uid };
+    }
 
     snapshot(uid, after) {
         const u = this.user(uid);
@@ -121,6 +135,10 @@ export class Chat extends DurableObject {
             ),
             // Likewise every unsent message, so ones taken back while this page was offline disappear too.
             unsent: this.rows("SELECT id FROM messages WHERE convo = ? AND type = 'unsent'", c.id).map((m) => m.id),
+            // And tickets, including ones thrown out on appeal (null) while this page was offline.
+            tickets: Object.fromEntries(
+                this.rows("SELECT * FROM messages WHERE convo = ? AND ticket IS NOT NULL", c.id).map((m) => [m.id, this.ticketOf(m, uid)]),
+            ),
         };
     }
 
@@ -260,7 +278,7 @@ export class Chat extends DurableObject {
 
         if (req.method !== "POST") return empty(404);
         const isDuplicate = (cid) => !!this.row("SELECT 1 FROM messages WHERE convo = ? AND sender = ? AND cid = ?", c.id, uid, cid);
-        if (["/api/send", "/api/upload", "/api/typing", "/api/react", "/api/unsend"].includes(path)) this.touch(uid);
+        if (["/api/send", "/api/upload", "/api/typing", "/api/react", "/api/unsend", "/api/ticket", "/api/appeal"].includes(path)) this.touch(uid);
 
         if (path === "/api/upload") {
             const type = (req.headers.get("Content-Type") || "").split(";")[0].trim();
@@ -305,13 +323,29 @@ export class Chat extends DurableObject {
             if (!text.trim()) return empty(400);
             // The page retries until it sees its message come back; cid makes retries harmless.
             if (!isDuplicate(cid)) this.addMessage(c, uid, { type: "text", text, cid, reply: body.reply, mobile: /Mobi/.test(req.headers.get("User-Agent") || "") });
+        } else if (path === "/api/ticket") {
+            // Report a message (your own counts as a confession): one ticket per message.
+            const m = this.row("SELECT * FROM messages WHERE id = ? AND convo = ? AND type NOT IN ('leave', 'unsent')", Number(body.id) || 0, c.id);
+            const reason = String(body.reason || "").trim().slice(0, 30);
+            if (!m || !reason) return empty(400);
+            if (m.ticket && m.ticket !== "null") return empty(409);
+            const penalty = m.sender === uid ? pick(CONFESSION_PENALTIES) : pick(PENALTIES);
+            const ticket = JSON.stringify({ by: uid, reason, penalty });
+            this.broadcast(c, this.row("UPDATE messages SET ticket = ? WHERE id = ? RETURNING *", ticket, m.id));
+        } else if (path === "/api/appeal") {
+            // Only the person who got the ticket, once, and not for a confession.
+            const m = this.row("SELECT * FROM messages WHERE id = ? AND convo = ? AND sender = ?", Number(body.id) || 0, c.id, uid);
+            const t = JSON.parse(m?.ticket || "null");
+            if (!t || t.by === uid || t.appeal) return empty(400);
+            const ticket = Math.random() < APPEAL_ODDS ? "null" : JSON.stringify({ ...t, appeal: "rejected" });
+            this.broadcast(c, this.row("UPDATE messages SET ticket = ? WHERE id = ? RETURNING *", ticket, m.id));
         } else if (path === "/api/unsend") {
             // Only your own messages. The content (and any photo or voice clip) is deleted for good;
             // what's left is a marker both sides show as "…已收回一則訊息".
             const m = this.row("SELECT * FROM messages WHERE id = ? AND convo = ? AND sender = ? AND type NOT IN ('leave', 'unsent')", Number(body.id) || 0, c.id, uid);
             if (!m) return empty(400);
             if (m.file) this.sql.exec("DELETE FROM files WHERE id = ?", m.file);
-            this.broadcast(c, this.row("UPDATE messages SET type = 'unsent', text = NULL, file = NULL, reactions = NULL WHERE id = ? RETURNING *", m.id));
+            this.broadcast(c, this.row("UPDATE messages SET type = 'unsent', text = NULL, file = NULL, reactions = NULL, ticket = NULL WHERE id = ? RETURNING *", m.id));
         } else if (path === "/api/react") {
             // One reaction per person per message; an empty emoji removes yours.
             const m = this.row("SELECT * FROM messages WHERE id = ? AND convo = ? AND type NOT IN ('leave', 'unsent')", Number(body.id) || 0, c.id);

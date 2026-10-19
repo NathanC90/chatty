@@ -106,7 +106,23 @@
     .picker #emojis button:hover { transform: scale(1.2); }
     .picker #emojis button.selected { background: var(--them); }
     .picker .acts { display: flex; margin-top: 2px; padding-top: 2px; border-top: 1px solid var(--line); }
-    .picker .acts button { flex: 1; padding: 8px 10px; border-radius: 12px; font-size: 0.9rem; }
+    .picker .acts button { flex: 1; padding: 8px 6px; border-radius: 12px; font-size: 0.9rem; white-space: nowrap; }
+    /* 🚨 Chatty police: reporting a message is a joke between friends */
+    .reasons { display: grid; gap: 6px; margin-bottom: 10px; }
+    .reasons button { padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; text-align: left; }
+    .reasons button:hover { background: var(--bg); }
+    .ticket { display: flex; align-items: flex-start; gap: 10px; max-width: 100%; margin-top: 6px; padding: 8px 12px; border: 1.5px dashed var(--danger); border-radius: 10px; background: color-mix(in srgb, var(--danger) 7%, var(--surface)); font-size: 0.8rem; line-height: 1.5; text-align: left; transform: rotate(-0.8deg); }
+    .ticket .stamp { flex: none; margin-top: 2px; padding: 0 6px; border: 2px solid var(--danger); border-radius: 6px; color: var(--danger); font-weight: 800; transform: rotate(-8deg); }
+    .ticket .verdict { color: var(--muted); }
+    .ticket .appeal-btn { margin-top: 4px; padding: 2px 10px; border: 1px solid var(--danger); border-radius: 999px; color: var(--danger); font-size: 0.75rem; }
+    .ticket .rejected { margin-top: 2px; color: var(--danger); font-weight: 700; }
+    .siren { position: fixed; z-index: 30; top: 0; left: 0; right: 0; padding: 14px; padding-top: max(14px, env(safe-area-inset-top)); color: #fff; font-weight: 800; letter-spacing: 0.08em; text-align: center; pointer-events: none; animation: siren-in 2.6s ease forwards, siren-flash 0.4s steps(1) infinite; }
+    @keyframes siren-flash { 0% { background: #e5484d; } 50% { background: #3b5bdb; } }
+    @keyframes siren-in { 0% { transform: translateY(-100%); } 12%, 85% { transform: translateY(0); } 100% { transform: translateY(-100%); } }
+    .shake { animation: shake 0.5s ease-in-out 2; }
+    @keyframes shake { 0%, 100% { transform: none; } 20% { transform: translateX(-6px) rotate(-2deg); } 40% { transform: translateX(6px) rotate(2deg); } 60% { transform: translateX(-4px); } 80% { transform: translateX(4px); } }
+    .toast { position: fixed; z-index: 30; left: 50%; bottom: 96px; padding: 10px 18px; border-radius: 999px; background: var(--text); color: var(--surface); font-size: 0.9rem; white-space: nowrap; pointer-events: none; animation: toast 3s ease forwards; }
+    @keyframes toast { 0% { opacity: 0; transform: translate(-50%, 10px); } 10%, 85% { opacity: 1; transform: translate(-50%, 0); } 100% { opacity: 0; transform: translate(-50%, 0); } }
     .picker .acts button:hover { background: var(--bg); }
     .picker .acts .unsend { color: var(--danger); }
     /* Replies: the quoted message above a reply, and the preview bar above the text box */
@@ -234,6 +250,7 @@
     <div class="acts">
         <button type="button" id="replyMsg">回覆</button>
         <button type="button" id="copyMsg">複製</button>
+        <button type="button" id="ticketMsg">🚨 檢舉</button>
         <button type="button" class="unsend" id="unsendMsg">收回</button>
     </div>
 </div>
@@ -262,6 +279,19 @@
         <div class="actions">
             <button class="ghost" value="cancel">取消</button>
             <button class="danger" value="report" id="reportConfirm">回報並離開對話</button>
+        </div>
+    </form>
+</dialog>
+
+<dialog id="ticketDialog">
+    <form method="dialog">
+        <h2 id="ticketTitle">🚨 檢舉這則訊息</h2>
+        <p id="ticketHint">請選擇罪名：</p>
+        <div class="reasons" id="reasons"></div>
+        <input class="field" id="customReason" maxlength="30" placeholder="或自己寫罪名…" autocomplete="off">
+        <div class="actions">
+            <button class="ghost" value="cancel">取消</button>
+            <button class="danger" value="custom" id="customSubmit">送出</button>
         </div>
     </form>
 </dialog>
@@ -384,6 +414,7 @@
             // Reactions changed on messages already on screen (e.g. while this page was offline).
             for (const m of msgs) m.reactions = d.reactions?.[m.id] ?? m.reactions;
             for (const m of msgs) if (d.unsent?.includes(m.id)) Object.assign(m, { type: "unsent", text: undefined, url: undefined, reactions: null });
+            for (const m of msgs) if (d.tickets && m.id in d.tickets) m.ticket = d.tickets[m.id];
             show("chat");
             merge(d.messages, true);
             refreshUsage();
@@ -401,6 +432,7 @@
                 else notify();
             }
             merge([m]);
+            if (old) policeNews(old, m);
         } else if (d.type === "typing" && convo) {
             $("typing").textContent = "對方正在輸入…";
             clearTimeout(typingTimer);
@@ -600,6 +632,8 @@
             row.append(line);
             const chips = reactionChips(m, bubble);
             if (chips) row.append(chips);
+            const ticket = ticketCard(m);
+            if (ticket) row.append(ticket);
             row.append(el("div", "meta", meta.join(" · ")));
             out.push(row);
         }
@@ -672,6 +706,107 @@
         }
     }
 
+    // ---------- 🚨 Chatty police ----------
+    // Reporting is a joke between friends: pick a charge, the police siren goes off on both
+    // screens, and a ticket with a random penalty sticks to the message. Reporting your own
+    // message is a confession (lighter sentence); the accused can appeal once.
+
+    const REASONS = ["😂 太好笑，笑到肚子痛", "🥶 冷笑話，全場冷凍", "🥰 太肉麻，雞皮疙瘩掉滿地", "✏️ 打錯字還裝沒事", "🤥 說謊不打草稿", "🍜 害我肚子餓了"];
+    for (const r of REASONS) {
+        const b = el("button", null, r);
+        b.value = r;
+        $("reasons").append(b);
+    }
+
+    let ticketFor = null;
+    function openTicket(m) {
+        ticketFor = m;
+        $("ticketTitle").textContent = m.mine ? "🙋 自首" : "🚨 檢舉這則訊息";
+        $("ticketHint").textContent = m.mine ? "坦白從寬！你犯了什麼罪？" : "請選擇罪名：";
+        $("customReason").value = "";
+        $("ticketDialog").returnValue = "";
+        $("ticketDialog").showModal();
+    }
+    $("customSubmit").onclick = (e) => {
+        if ($("customReason").value.trim()) return;
+        e.preventDefault();
+        $("customReason").focus();
+    };
+    $("ticketDialog").onclose = async () => {
+        const choice = $("ticketDialog").returnValue;
+        if (!choice || choice === "cancel") return;
+        const reason = choice === "custom" ? $("customReason").value.trim() : choice;
+        const res = await post("/api/ticket", { id: ticketFor.id, reason }).catch(() => null);
+        if (res?.status === 409) toast("這則訊息已經被開過罰單了 👮");
+        else if (!res?.ok) toast("警察忙線中，請稍後再試 📵");
+    };
+
+    async function appeal(m) {
+        toast("⚖️ 法官審理中…");
+        const res = await post("/api/appeal", { id: m.id }).catch(() => null);
+        if (!res?.ok) toast("法院休息中，請稍後再試 📵");
+    }
+
+    function ticketCard(m) {
+        const t = m.ticket;
+        if (!t) return null;
+        const card = el("div", "ticket");
+        const body = el("div");
+        body.append(el("div", null, `${t.confession ? "🙋 自首" : "🚨 罪名"}：${t.reason}`), el("div", "verdict", `⚖️ 判決：${t.penalty}`));
+        if (t.appeal === "rejected") body.append(el("div", "rejected", "上訴駁回，罰單維持 🔨"));
+        else if (m.mine && !t.confession && !partnerLeft) {
+            const b = el("button", "appeal-btn", "我要上訴");
+            b.type = "button";
+            b.onclick = () => appeal(m);
+            body.append(b);
+        }
+        card.append(el("span", "stamp", "罰單"), body);
+        return card;
+    }
+
+    // What both screens show when a ticket is issued, upheld or thrown out.
+    function policeNews(old, m) {
+        if (m.ticket && !old.ticket) siren(m.id, m.ticket.confession ? "🙋 有人自首了！" : "🚨 Chatty 警察出動！");
+        else if (old.ticket && !m.ticket && m.type !== "unsent") toast("🎉 上訴成功，無罪釋放！");
+        else if (m.ticket?.appeal === "rejected" && !old.ticket?.appeal) toast("🔨 上訴駁回，罰單維持！");
+    }
+
+    function toast(text) {
+        document.querySelector(".toast")?.remove();
+        const t = el("div", "toast", text);
+        t.setAttribute("role", "status");
+        document.body.append(t);
+        setTimeout(() => t.remove(), 3100);
+    }
+
+    function siren(id, text) {
+        document.querySelector(".siren")?.remove();
+        const s = el("div", "siren", text);
+        s.setAttribute("role", "status");
+        document.body.append(s);
+        setTimeout(() => s.remove(), 2700);
+        const bubble = log.querySelector(`[data-mid="${id}"] .bubble`);
+        bubble?.classList.remove("shake");
+        void bubble?.offsetWidth; // restart the animation
+        bubble?.classList.add("shake");
+        if (!store.get("chatty.sound", true)) return;
+        try {
+            // A two-tone siren: four wails over about a second.
+            audioCtx ??= new AudioContext();
+            const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime;
+            o.type = "triangle";
+            for (let i = 0; i < 4; i++) {
+                o.frequency.setValueAtTime(960, t + i * 0.3);
+                o.frequency.linearRampToValueAtTime(640, t + i * 0.3 + 0.3);
+            }
+            g.gain.setValueAtTime(0.08, t);
+            g.gain.linearRampToValueAtTime(0, t + 1.2);
+            o.connect(g).connect(audioCtx.destination);
+            o.start(t);
+            o.stop(t + 1.2);
+        } catch {}
+    }
+
     // ---------- image viewer ----------
     // Shown over the chat rather than opening the image as a page: from the home screen there's
     // no way back from such a page. ✕, Esc, a tap beside the image or the phone's back button close it.
@@ -718,6 +853,8 @@
         if (!m || partnerLeft || m.type === "unsent") return;
         pickerFor = m;
         $("unsendMsg").hidden = !m.mine;
+        $("ticketMsg").hidden = !!m.ticket; // one ticket per message
+        $("ticketMsg").textContent = m.mine ? "🙋 自首" : "🚨 檢舉";
         for (const b of $("emojis").children) b.classList.toggle("selected", b.textContent === m.reactions?.mine);
         $("copyMsg").hidden = m.type !== "text";
         picker.hidden = false;
@@ -748,6 +885,11 @@
         const m = pickerFor;
         closePicker();
         startReply(m);
+    };
+    $("ticketMsg").onclick = () => {
+        const m = pickerFor;
+        closePicker();
+        openTicket(m);
     };
     $("unsendMsg").onclick = () => {
         const m = pickerFor;
