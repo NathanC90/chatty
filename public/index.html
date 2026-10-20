@@ -101,7 +101,15 @@
     .viewer-bar { position: fixed; top: max(8px, env(safe-area-inset-top)); right: 8px; display: flex; gap: 4px; }
     .viewer .icon, .viewer .icon:hover { color: #fff; background: rgb(255 255 255 / 0.12); }
     .picker { position: fixed; z-index: 10; display: flex; flex-direction: column; padding: 4px; border: 1px solid var(--line); border-radius: 22px; background: var(--surface); box-shadow: 0 8px 30px rgb(0 0 0 / 0.2); }
-    .picker #emojis { display: grid; grid-template-columns: repeat(7, 42px); justify-content: center; } /* 13 emoji: two rows */
+    .picker #emojis { display: flex; } /* 7 quick emoji + a "+" button: one row on a phone, like WhatsApp */
+    .picker .more-emoji { width: 42px; height: 42px; border-radius: 50%; background: var(--bg); color: var(--muted); font-size: 1.4rem; }
+    .picker .more-emoji:hover { color: var(--text); }
+    .emoji-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(42px, 1fr)); max-height: min(46vh, 340px); margin: 0 -6px 12px; overflow-y: auto; }
+    .emoji-grid button { height: 42px; border-radius: 10px; font-size: 1.5rem; }
+    .emoji-grid button:hover { background: var(--bg); }
+    .emoji-grid h3 { grid-column: 1 / -1; margin: 8px 6px 2px; color: var(--muted); font-size: 0.75rem; font-weight: 600; }
+    .emoji-own { display: flex; gap: 8px; }
+    .emoji-own .field { flex: 1; min-width: 0; }
     .picker #emojis button { width: 42px; height: 42px; border-radius: 50%; font-size: 1.45rem; transition: transform 0.12s; }
     .picker #emojis button:hover { transform: scale(1.2); }
     .picker #emojis button.selected { background: var(--them); }
@@ -280,6 +288,18 @@
             <button class="ghost" value="cancel">取消</button>
             <button class="danger" value="report" id="reportConfirm">回報並離開對話</button>
         </div>
+    </form>
+</dialog>
+
+<dialog id="emojiDialog">
+    <form method="dialog">
+        <h2>選擇表情</h2>
+        <div class="emoji-grid" id="emojiGrid"></div>
+        <div class="emoji-own">
+            <input class="field" id="emojiInput" maxlength="32" placeholder="或用鍵盤輸入任何表情" aria-label="自訂表情" autocomplete="off">
+            <button class="primary" value="input" id="emojiInputOk">送出</button>
+        </div>
+        <div class="actions"><button class="ghost" value="cancel">取消</button></div>
     </form>
 </dialog>
 
@@ -826,16 +846,71 @@
     // ---------- reactions ----------
     // Long-press a message (phone), or hover / right-click it (computer). One per person; tap yours again to remove it.
 
-    const EMOJI = ["😘", "😡", "👍", "❤️", "🤮", "😂", "🙈", "🥹", "🥳", "😎", "😮", "😢", "🙏"];
+    // A row of 7 quick emoji plus "+", which opens every emoji (or any typed on the keyboard).
+    // Ones picked there join the front of this person's quick row, like WhatsApp's recents.
+    const DEFAULT_QUICK = ["😘", "😡", "👍", "❤️", "🤮", "😂", "🙈"];
+    const quickEmoji = () => {
+        const q = store.get("chatty.quick", DEFAULT_QUICK);
+        return Array.isArray(q) && q.length === DEFAULT_QUICK.length ? q : DEFAULT_QUICK;
+    };
+    // Any single emoji (one grapheme made only of emoji code points), not text or several emoji.
+    const isEmoji = (s) =>
+        s.length <= 32 && /^(?:\p{Extended_Pictographic}|\p{Emoji_Component}|\u200d|\ufe0f)+$/u.test(s) &&
+        /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(s) && [...new Intl.Segmenter().segment(s)].length === 1;
+
     const picker = $("picker");
     let pickerFor = null;
-    for (const e of EMOJI) {
-        const b = el("button", null, e);
-        b.type = "button";
-        b.setAttribute("aria-label", `回應 ${e}`);
-        b.onclick = () => react(pickerFor, e);
-        $("emojis").append(b);
+    function renderQuick(mine) {
+        const buttons = quickEmoji().map((e) => {
+            const b = el("button", e === mine ? "selected" : null, e);
+            b.type = "button";
+            b.setAttribute("aria-label", `回應 ${e}`);
+            b.onclick = () => react(pickerFor, e);
+            return b;
+        });
+        const more = el("button", "more-emoji", "+");
+        more.type = "button";
+        more.setAttribute("aria-label", "更多表情");
+        more.onclick = () => openEmojiPanel(pickerFor);
+        $("emojis").replaceChildren(...buttons, more);
     }
+
+    const PANEL = {
+        表情: "😀😃😄😁😆😅🤣😂🙂😉😊😇🥰😍🤩😘😗😚😋😛😜🤪😝🤑🤗🤭🫢🤫🤔🫡🤐🤨😐😑😶🫠😏😒🙄😬🤥😌😔😪🤤😴😷🤒🤕🤢🤮🤧🥵🥶🥴😵🤯🤠🥳🥸😎🤓🧐😕🫤😟🙁😮😯😲😳🥺🥹😦😧😨😰😥😢😭😱😖😣😞😓😩😫🥱😤😡😠🤬😈👿💀💩🤡👻👽🤖",
+        手勢: "👍👎👏🙌🫶👐🤲🤝🙏✌️🤞🫰🤟🤘👌🤌🤏👈👉👆👇☝️✋🤚🖐️🖖👋🤙💪🫵",
+        愛心: "❤️🧡💛💚💙💜🖤🤍🤎💔❤️‍🔥💕💞💓💗💖💘💝💯💢💥💫💦💤",
+        其他: "🙈🙉🙊🐶🐱🐷🐸🐼🐻🦄🐟🌹🌸🔥⭐🌈☀️🌙🎉🎊🎁🎂🍰🧋☕🍜🍕🍔🍟🍣🍮🍺🥂⚽🎮🎵🎶📷💡💰👑💍✅❌❓❗",
+    };
+    for (const [title, emoji] of Object.entries(PANEL)) {
+        $("emojiGrid").append(el("h3", null, title));
+        for (const { segment } of new Intl.Segmenter().segment(emoji)) {
+            const b = el("button", null, segment);
+            b.value = segment;
+            $("emojiGrid").append(b);
+        }
+    }
+    let emojiFor = null;
+    function openEmojiPanel(m) {
+        closePicker();
+        emojiFor = m;
+        $("emojiInput").value = "";
+        $("emojiDialog").returnValue = "";
+        $("emojiDialog").showModal();
+    }
+    $("emojiInputOk").onclick = (e) => {
+        if (isEmoji($("emojiInput").value.trim())) return;
+        e.preventDefault();
+        toast("請輸入一個表情符號");
+        $("emojiInput").focus();
+    };
+    $("emojiDialog").onclose = () => {
+        const choice = $("emojiDialog").returnValue;
+        const emoji = choice === "input" ? $("emojiInput").value.trim() : choice;
+        if (!emojiFor || !isEmoji(emoji)) return;
+        const q = quickEmoji();
+        if (!q.includes(emoji)) store.set("chatty.quick", [emoji, ...q].slice(0, q.length));
+        react(emojiFor, emoji);
+    };
 
     function reactionChips(m, bubble) {
         const { mine, theirs } = m.reactions || {};
@@ -855,7 +930,7 @@
         $("unsendMsg").hidden = !m.mine;
         $("ticketMsg").hidden = !!m.ticket; // one ticket per message
         $("ticketMsg").textContent = m.mine ? "🙋 自首" : "🚨 檢舉";
-        for (const b of $("emojis").children) b.classList.toggle("selected", b.textContent === m.reactions?.mine);
+        renderQuick(m.reactions?.mine);
         $("copyMsg").hidden = m.type !== "text";
         picker.hidden = false;
         const r = anchor.getBoundingClientRect(), w = picker.offsetWidth, h = picker.offsetHeight;

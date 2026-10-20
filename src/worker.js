@@ -15,7 +15,10 @@ const PRESENCE = ["offline", "idle", "online"]; // worst to best
 // The page pings every 25 s, but browsers slow timers in background tabs to about once a minute,
 // so a socket only counts as gone after 3 silent minutes. Overridable for tests.
 const STALE_MS = 180_000;
-const EMOJI = ["😘", "😡", "👍", "❤️", "🤮", "😂", "🙈", "🥹", "🥳", "😎", "😮", "😢", "🙏"];
+// Any single emoji (one grapheme made only of emoji code points), not text or several emoji.
+const isEmoji = (s) =>
+    s.length <= 32 && /^(?:\p{Extended_Pictographic}|\p{Emoji_Component}|\u200d|\ufe0f)+$/u.test(s) &&
+    /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(s) && [...new Intl.Segmenter().segment(s)].length === 1;
 // Reporting a message is a joke between friends: the "judge" hands down a random penalty.
 const PENALTIES = [
     "罰請對方喝一杯珍奶 🧋", "罰講一個更好笑的笑話 🎤", "罰傳一張醜照 🤳", "罰用語音唱一句歌 🎶",
@@ -350,7 +353,7 @@ export class Chat extends DurableObject {
             // One reaction per person per message; an empty emoji removes yours.
             const m = this.row("SELECT * FROM messages WHERE id = ? AND convo = ? AND type NOT IN ('leave', 'unsent')", Number(body.id) || 0, c.id);
             const emoji = body.emoji ? String(body.emoji) : "";
-            if (!m || (emoji && !EMOJI.includes(emoji))) return empty(400);
+            if (!m || (emoji && !isEmoji(emoji))) return empty(400);
             const r = JSON.parse(m.reactions || "{}");
             if (emoji) r[uid] = emoji;
             else delete r[uid];

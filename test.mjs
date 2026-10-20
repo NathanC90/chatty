@@ -102,9 +102,13 @@ try {
     await a.post("/api/react", { id: got.msg.id, emoji: "👍" }); // changing replaces
     await a.next(), await b.next(), await a.next();
     assert.deepEqual((await b.next()).msg.reactions, { mine: "❤️", theirs: "👍" });
-    assert.equal((await b.post("/api/react", { id: got.msg.id, emoji: "💩" })).status, 400);
-    assert.equal((await b.post("/api/react", { id: got.msg.id, emoji: "🥹" })).status, 204); // one of the added ones
-    await a.next(), await b.next();
+    // Any single emoji works, including flags, skin tones and joined ones; text or several emoji don't.
+    for (const bad of ["abc", "👍👍", "1", "👍a"]) assert.equal((await b.post("/api/react", { id: got.msg.id, emoji: bad })).status, 400, bad);
+    for (const good of ["💩", "🇹🇼", "👍🏽", "❤️‍🔥", "🥹"]) {
+        assert.equal((await b.post("/api/react", { id: got.msg.id, emoji: good })).status, 204, good);
+        assert.equal((await a.next()).msg.reactions.theirs, good);
+        await b.next();
+    }
     await b.post("/api/react", { id: got.msg.id, emoji: "❤️" }); // back to ❤️ for the checks below
     await a.next(), await b.next();
     assert.equal((await b.post("/api/react", { id: 999999, emoji: "👍" })).status, 400);
