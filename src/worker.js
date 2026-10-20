@@ -59,7 +59,13 @@ export default {
         const resume = /^\/resume\/([0-9a-f-]{36})$/.exec(url.pathname);
         if (resume) return new Response(null, { status: 302, headers: { "Set-Cookie": setCookie(resume[1]), Location: "/" } });
         if (!cookieUid(req)) return empty(401);
-        return env.CHAT.get(env.CHAT.idFromName("chatty")).fetch(req);
+        try {
+            return await env.CHAT.get(env.CHAT.idFromName("chatty")).fetch(req);
+        } catch (e) {
+            // Say what went wrong (e.g. a Cloudflare free-plan limit) instead of a bare "error code: 1101".
+            console.error("Durable Object failed:", e);
+            return new Response(`Chatty 暫時無法連線：${e?.message || e}`, { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+        }
     },
 };
 
