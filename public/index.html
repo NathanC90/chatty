@@ -49,6 +49,8 @@
     @media (hover: hover) { .help-wrap:hover .help { display: block; } }
     .help ul { display: grid; gap: 6px; margin: 0; padding-left: 18px; }
     .help b { color: var(--text); font-weight: 600; word-break: break-all; }
+    .down-title { font-size: 1.1rem; font-weight: 600; }
+    .down-text { max-width: 320px; font-size: 0.9rem; }
     .copyright { position: absolute; left: 0; right: 0; bottom: max(14px, env(safe-area-inset-bottom)); color: var(--muted); font-size: 0.75rem; text-align: center; }
     .spinner { width: 36px; height: 36px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.9s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -236,11 +238,13 @@
         <p class="copyright">© <span id="year">2026</span> Chatty. All rights reserved.</p>
     </section>
 
-    <section class="center" id="down" hidden>
+    <!-- Shown from the first moment, so the page is never blank: "連線中…", or why it can't connect -->
+    <section class="center" id="down">
         <div class="logo">Chatty<span>.</span></div>
-        <p>暫時連不上聊天室</p>
-        <p class="sub" id="downReason"></p>
-        <p class="hint">你們的對話紀錄都還在。恢復後會自動重新連線，不用重新整理。</p>
+        <div class="spinner" id="downSpinner" aria-hidden="true"></div>
+        <p id="downTitle" class="down-title">連線中…</p>
+        <p id="downReason" class="down-text"></p>
+        <p id="downHint" class="down-text sub" hidden>你們的對話紀錄都還在，恢復後會自動重新連線，不用重新整理。</p>
     </section>
 
     <section class="center" id="waiting" hidden>
@@ -419,12 +423,25 @@
     async function explainDown() {
         if (convo && !$("chat").hidden) return; // in a chat, the "連線中…" banner already says it
         show("down");
+        $("downTitle").textContent = "暫時連不上聊天室";
+        $("downHint").hidden = false;
+        let reason = "網路不穩，正在重新連線…";
         try {
             const res = await fetch("/api/usage");
-            $("downReason").textContent = res.ok ? "網路不穩，正在重新連線…" : (await res.text()).slice(0, 200);
-        } catch {
-            $("downReason").textContent = "網路不穩，正在重新連線…";
-        }
+            const text = res.ok ? "" : await res.text();
+            if (/exceeded|free tier|limit/i.test(text)) {
+                // Cloudflare's free daily allowances reset at midnight UTC: say when that is here.
+                const now = new Date(), reset = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+                const at = reset.toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false });
+                reason = `今天的免費使用量用完了，${reset.getDate() === now.getDate() ? "今天" : "明天"} ${at} 會自動恢復。`;
+            } else if (res.status === 401) {
+                reason = "這個瀏覽器的登入資料不見了。如果有存「在其他裝置繼續這段對話」的連結，打開它就能回到對話。";
+            } else if (res.status >= 500) {
+                reason = "伺服器暫時出了點問題，正在自動重試…";
+            }
+        } catch {}
+        $("downReason").textContent = reason;
+        $("downSpinner").hidden = true;
     }
     // Phones often keep a dead connection that still looks open; a ping nobody answers exposes it.
     function checkAlive() {
