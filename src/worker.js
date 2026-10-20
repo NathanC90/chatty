@@ -20,13 +20,25 @@ const isEmoji = (s) =>
     s.length <= 32 && /^(?:\p{Extended_Pictographic}|\p{Emoji_Component}|\u200d|\ufe0f)+$/u.test(s) &&
     /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(s) && [...new Intl.Segmenter().segment(s)].length === 1;
 // Reporting a message is a joke between friends: the "judge" hands down a random penalty.
+// Nothing embarrassing: playful, doable right there in the chat.
 const PENALTIES = [
-    "罰請對方喝一杯珍奶 🧋", "罰講一個更好笑的笑話 🎤", "罰傳一張醜照 🤳", "罰用語音唱一句歌 🎶",
-    "罰誇對方三句 💐", "罰今天早點睡 😴", "罰下次吃飯你請 🍜", "罰學貓叫一聲（要錄音）🐱",
+    "罰請對方喝一杯珍奶 🧋", "罰講一個更好笑的笑話 🎤", "罰用語音唱一句歌 🎶", "罰誇對方三句，不能重複 💐",
+    "罰下次吃飯你請 🍜", "罰學貓叫一聲（要錄音）🐱", "罰接下來五則訊息句尾都要加「喵」", "罰十分鐘內不准說「哈哈」😶",
+    "罰用台語說「我錯了」並錄音 🗣️", "罰幫對方取一個新綽號 🏷️", "罰作一首兩句的打油詩 📜", "罰推薦一首最近在聽的歌 🎧",
+    "罰分享今天最開心的一件事 ☀️", "罰用三個表情符號形容今天 🎭", "罰傳一張你現在窗外的照片 🪟", "罰講一個冷知識 🧠",
+    "罰說出對方的三個優點 ✨", "罰用注音文講話三句 ㄅㄆㄇ", "罰下一則訊息要用倒裝句 🔄", "罰今晚睡前要跟對方說晚安 🌙",
+    "罰傳你相簿裡最新的一張美食照 🍰", "罰下次見面負責拍照 📸",
 ];
-const CONFESSION_PENALTIES = ["從輕量刑：罰喝一杯水 💧", "從輕量刑：罰對自己說聲加油 💪", "自首有功，緩刑一天 ⚖️"];
+const CONFESSION_PENALTIES = [
+    "從輕量刑：罰喝一杯水 💧", "從輕量刑：罰對自己說聲加油 💪", "自首有功，緩刑一天 ⚖️",
+    "從輕量刑：罰伸個懶腰 🙆", "坦白從寬：這次只記一個小過 📝",
+];
 const APPEAL_ODDS = 0.35; // chance an appeal gets the ticket thrown out
-const pick = (list) => list[Math.floor(Math.random() * list.length)];
+// Random, but never one of the penalties handed down most recently in this chat.
+const pickFresh = (list, recent) => {
+    const fresh = list.filter((p) => !recent.slice(0, Math.floor(list.length / 2.5)).includes(p));
+    return fresh[Math.floor(Math.random() * fresh.length)];
+};
 const TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp", "audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg"];
 
 const cookieUid = (req) => /(?:^|;\s*)uid=([0-9a-f-]{36})/.exec(req.headers.get("Cookie") || "")?.[1];
@@ -332,8 +344,13 @@ export class Chat extends DurableObject {
             const reason = String(body.reason || "").trim().slice(0, 30);
             if (!m || !reason) return empty(400);
             if (m.ticket && m.ticket !== "null") return empty(409);
-            const penalty = m.sender === uid ? pick(CONFESSION_PENALTIES) : pick(PENALTIES);
-            const ticket = JSON.stringify({ by: uid, reason, penalty });
+            const recent = this.rows("SELECT ticket FROM messages WHERE convo = ? AND ticket IS NOT NULL", c.id)
+                .map((r) => JSON.parse(r.ticket))
+                .filter(Boolean)
+                .sort((x, y) => (y.time || 0) - (x.time || 0))
+                .map((t) => t.penalty);
+            const penalty = pickFresh(m.sender === uid ? CONFESSION_PENALTIES : PENALTIES, recent);
+            const ticket = JSON.stringify({ by: uid, reason, penalty, time: Date.now() });
             this.broadcast(c, this.row("UPDATE messages SET ticket = ? WHERE id = ? RETURNING *", ticket, m.id));
         } else if (path === "/api/appeal") {
             // Only the person who got the ticket, once, and not for a confession.

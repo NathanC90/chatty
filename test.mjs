@@ -149,6 +149,18 @@ try {
     assert.equal((await a.next()).msg.ticket.confession, true);
     await b.next();
     assert.equal((await b.post("/api/appeal", { id: x.id })).status, 400);
+    // Nine tickets in a row: never the same penalty twice running, and nothing embarrassing.
+    const penalties = [];
+    for (let i = 0; i < 9; i++) {
+        await b.post("/api/send", { cid: `p${i}`, text: `joke ${i}` });
+        const joke = (await a.next()).msg;
+        await b.next();
+        await a.post("/api/ticket", { id: joke.id, reason: "🥶 冷笑話" });
+        penalties.push((await a.next()).msg.ticket.penalty);
+        await b.next();
+    }
+    assert.equal(new Set(penalties).size, 9, penalties.join(" / "));
+    assert.ok(!penalties.some((p) => p.includes("醜照")));
 
     // Images: stored, served only to the two people in the chat.
     const img = await fetch(`${base}/api/upload?cid=i1`, { method: "POST", headers: { cookie: a.cookie, "content-type": "image/png" }, body: "png-bytes" });
@@ -239,7 +251,7 @@ try {
     assert.deepEqual(resumed.tickets[got.msg.id], verdict.ticket); // and tickets, even thrown-out ones
     await b.listen();
     const reload = await b.next();
-    assert.deepEqual(reload.messages.map((m) => m.text ?? m.type), ["hello", "unsent", "x", "image", "image", "image", "image", "unsent", "you there?"]);
+    assert.deepEqual(reload.messages.map((m) => m.text ?? m.type), ["hello", "unsent", "x", ...Array.from({ length: 9 }, (_, i) => `joke ${i}`), "image", "image", "image", "image", "unsent", "you there?"]);
     assert.equal(reload.delivered, 0); // a hasn't confirmed b's message yet
 
     // Same identity in another browser via the resume link.
