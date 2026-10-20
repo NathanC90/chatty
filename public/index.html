@@ -124,9 +124,43 @@
     .ticket .verdict { color: var(--muted); }
     .ticket .appeal-btn { margin-top: 4px; padding: 2px 10px; border: 1px solid var(--danger); border-radius: 999px; color: var(--danger); font-size: 0.75rem; }
     .ticket .rejected { margin-top: 2px; color: var(--danger); font-weight: 700; }
-    .siren { position: fixed; z-index: 30; top: 0; left: 0; right: 0; padding: 14px; padding-top: max(14px, env(safe-area-inset-top)); color: #fff; font-weight: 800; letter-spacing: 0.08em; text-align: center; pointer-events: none; animation: siren-in 2.6s ease forwards, siren-flash 0.4s steps(1) infinite; }
-    @keyframes siren-flash { 0% { background: #e5484d; } 50% { background: #3b5bdb; } }
-    @keyframes siren-in { 0% { transform: translateY(-100%); } 12%, 85% { transform: translateY(0); } 100% { transform: translateY(-100%); } }
+    /* The police / court scene: beacon light on a blurred backdrop, a citation card, a stamp slamming down */
+    .police { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: rgb(10 10 20 / 0.38); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); animation: fade-in 0.25s ease both; }
+    .police.out { animation: fade-out 0.45s ease forwards; }
+    @keyframes fade-in { from { opacity: 0; } }
+    @keyframes fade-out { to { opacity: 0; } }
+    .police .lights, .police .lights::before, .police .lights::after { position: absolute; inset: 0; pointer-events: none; }
+    .police .lights::before, .police .lights::after { content: ""; animation: beacon 1.2s ease-in-out infinite; }
+    .police .lights::before { background: radial-gradient(75% 60% at 0% 0%, rgb(229 72 77 / 0.65), transparent 70%); }
+    .police .lights::after { background: radial-gradient(75% 60% at 100% 0%, rgb(59 91 219 / 0.65), transparent 70%); animation-delay: -0.6s; }
+    .police.court .lights::before { background: radial-gradient(70% 55% at 50% 0%, rgb(245 165 36 / 0.5), transparent 70%); animation: none; }
+    .police.court .lights::after { display: none; }
+    @keyframes beacon { 0%, 100% { opacity: 0.12; } 50% { opacity: 1; } }
+    .citation { position: relative; overflow: hidden; width: min(320px, 100%); padding: 24px 22px 20px; border-radius: 22px; background: var(--surface); color: var(--text); text-align: center; box-shadow: 0 30px 80px rgb(0 0 0 / 0.35), 0 0 0 1px var(--line); animation: card-in 0.55s cubic-bezier(0.2, 1.3, 0.35, 1) 0.1s both; }
+    .citation::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 5px; background: repeating-linear-gradient(90deg, #e5484d 0 22px, #3b5bdb 22px 44px); }
+    .court .citation::before { background: linear-gradient(90deg, #f5a524, #ffd666, #f5a524); }
+    .stamped .citation { animation: jolt 0.28s ease; }
+    @keyframes card-in { from { opacity: 0; transform: translateY(28px) scale(0.92); } }
+    @keyframes jolt { 35% { transform: translateY(4px) scale(0.985); } }
+    .citation .badge { display: grid; place-items: center; width: 54px; height: 54px; margin: 2px auto 12px; border-radius: 16px; background: linear-gradient(135deg, #3b5bdb, #5b5bf7); color: #fff; box-shadow: 0 10px 24px rgb(59 91 219 / 0.35); }
+    .court .citation .badge { background: linear-gradient(135deg, #d4890a, #f5a524); box-shadow: 0 10px 24px rgb(245 165 36 / 0.35); }
+    .citation .badge svg { width: 28px; height: 28px; fill: currentColor; }
+    .court .citation .badge svg { transform-origin: 80% 80%; animation: gavel 0.6s ease-in-out 2; }
+    @keyframes gavel { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-35deg); } }
+    .citation .kicker { color: var(--muted); font-size: 0.7rem; font-weight: 700; letter-spacing: 0.25em; }
+    .citation .headline { margin: 2px 0 14px; font-size: 1.4rem; font-weight: 800; }
+    .citation .charge { padding: 10px 12px; border-radius: 12px; background: var(--bg); font-weight: 600; }
+    .citation .sentence { margin-top: 10px; color: var(--muted); font-size: 0.9rem; }
+    .citation .seal { position: absolute; top: 64px; right: 14px; padding: 4px 10px; border: 3px solid var(--danger); border-radius: 8px; color: var(--danger); font-size: 1.15rem; font-weight: 900; letter-spacing: 0.12em; opacity: 0; transform: rotate(-12deg); }
+    .is-acquitted .citation .seal { border-color: #30a46c; color: #30a46c; }
+    .stamped .citation .seal { animation: slam 0.35s cubic-bezier(0.3, 1.6, 0.5, 1) forwards; }
+    @keyframes slam { from { opacity: 0; transform: rotate(-26deg) scale(2.6); } to { opacity: 0.92; transform: rotate(-12deg) scale(1); } }
+    .confetti { position: fixed; z-index: 41; width: 8px; height: 12px; border-radius: 2px; pointer-events: none; }
+    .ticket-glow { animation: ticket-glow 1.6s ease; }
+    @keyframes ticket-glow { from { box-shadow: 0 0 0 6px rgb(229 72 77 / 0.45); } to { box-shadow: 0 0 0 0 transparent; } }
+    @media (prefers-reduced-motion: reduce) {
+        .police, .police *, .police *::before, .police *::after { animation-duration: 0.01s !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; }
+    }
     .shake { animation: shake 0.5s ease-in-out 2; }
     @keyframes shake { 0%, 100% { transform: none; } 20% { transform: translateX(-6px) rotate(-2deg); } 40% { transform: translateX(6px) rotate(2deg); } 60% { transform: translateX(-4px); } 80% { transform: translateX(4px); } }
     .toast { position: fixed; z-index: 30; left: 50%; bottom: 96px; padding: 10px 18px; border-radius: 999px; background: var(--text); color: var(--surface); font-size: 0.9rem; white-space: nowrap; pointer-events: none; animation: toast 3s ease forwards; }
@@ -762,7 +796,6 @@
     };
 
     async function appeal(m) {
-        toast("⚖️ 法官審理中…");
         const res = await post("/api/appeal", { id: m.id }).catch(() => null);
         if (!res?.ok) toast("法院休息中，請稍後再試 📵");
     }
@@ -786,9 +819,9 @@
 
     // What both screens show when a ticket is issued, upheld or thrown out.
     function policeNews(old, m) {
-        if (m.ticket && !old.ticket) siren(m.id, m.ticket.confession ? "🙋 有人自首了！" : "🚨 Chatty 警察出動！");
-        else if (old.ticket && !m.ticket && m.type !== "unsent") toast("🎉 上訴成功，無罪釋放！");
-        else if (m.ticket?.appeal === "rejected" && !old.ticket?.appeal) toast("🔨 上訴駁回，罰單維持！");
+        if (m.ticket && !old.ticket) policeScene("ticket", m.ticket, m.id);
+        else if (old.ticket && !m.ticket && m.type !== "unsent") policeScene("acquitted", old.ticket, m.id);
+        else if (m.ticket?.appeal === "rejected" && !old.ticket?.appeal) policeScene("rejected", m.ticket, m.id);
     }
 
     function toast(text) {
@@ -799,31 +832,118 @@
         setTimeout(() => t.remove(), 3100);
     }
 
-    function siren(id, text) {
-        document.querySelector(".siren")?.remove();
-        const s = el("div", "siren", text);
-        s.setAttribute("role", "status");
-        document.body.append(s);
-        setTimeout(() => s.remove(), 2700);
-        const bubble = log.querySelector(`[data-mid="${id}"] .bubble`);
-        bubble?.classList.remove("shake");
-        void bubble?.offsetWidth; // restart the animation
-        bubble?.classList.add("shake");
+    const SHIELD = '<svg viewBox="0 0 24 24"><path d="M12 2 4 5v6c0 5.25 3.4 10.15 8 11 4.6-.85 8-5.75 8-11V5l-8-3zm0 5 1.47 2.98 3.29.48-2.38 2.32.56 3.27L12 14.5l-2.94 1.55.56-3.27-2.38-2.32 3.29-.48L12 7z"/></svg>';
+    const GAVEL = '<svg viewBox="0 0 24 24"><path d="M1 21h12v2H1zM5.25 8.07l2.83-2.83 14.14 14.14-2.83 2.83zM12.32 1l5.66 5.66-2.83 2.83-5.66-5.66zM3.83 9.49l5.66 5.66-2.83 2.83-5.66-5.66z"/></svg>';
+
+    // A short scene over the chat. "ticket": beacon lights, the citation card, a stamp slamming
+    // down (with a buzz on phones that allow it), then the card flies onto the message.
+    // "rejected" / "acquitted": the court deliberates for a moment before the verdict lands.
+    // A tap skips it.
+    function policeScene(kind, t, id) {
+        document.querySelector(".police")?.remove();
+        const court = kind !== "ticket";
+        const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+        const scene = el("div", `police is-${kind}${court ? " court" : ""}`); // "is-": .ticket is the ticket under a message
+        scene.setAttribute("role", "status");
+        const card = el("div", "citation");
+        const badge = el("div", "badge");
+        badge.innerHTML = court ? GAVEL : SHIELD;
+        const headline = el("div", "headline", court ? "法官審理中…" : t.confession ? "自首案件" : "罰單已開出");
+        const sentence = el("div", "sentence", court ? "請保持肅靜 🤫" : `⚖️ ${t.penalty}`);
+        const seal = el("div", "seal", { ticket: "罰單", rejected: "駁回", acquitted: "撤銷" }[kind]);
+        card.append(badge, el("div", "kicker", court ? "CHATTY COURT" : "CHATTY POLICE"), headline, el("div", "charge", t.reason), sentence, seal);
+        scene.append(el("div", "lights"), card);
+        document.body.append(scene);
+        if (court) chime("knock");
+        else chime("siren");
+
+        const STAMP_AT = court ? 1300 : 900;
+        const stampTimer = setTimeout(() => {
+            if (court) {
+                headline.textContent = kind === "rejected" ? "上訴駁回" : "無罪釋放";
+                sentence.textContent = kind === "rejected" ? "罰單維持，請乖乖受罰 🔨" : "罰單撤銷，法官今天心情很好 🎉";
+            }
+            scene.classList.add("stamped");
+            buzz(kind === "acquitted" ? [30, 50, 30, 50, 30] : [80, 60, 180]);
+            chime(kind === "acquitted" ? "fanfare" : "thud");
+            if (kind === "acquitted" && !reduce) confetti();
+            const bubble = log.querySelector(`[data-mid="${id}"] .bubble`);
+            bubble?.classList.remove("shake");
+            void bubble?.offsetWidth; // restart the animation
+            bubble?.classList.add("shake");
+        }, reduce ? 0 : STAMP_AT);
+
+        let done = false;
+        const finish = () => {
+            if (done) return;
+            done = true;
+            clearTimeout(endTimer);
+            clearTimeout(stampTimer);
+            const target = log.querySelector(`[data-mid="${id}"] .ticket`);
+            if (target && !reduce) {
+                // The card shrinks onto the ticket under the message.
+                const a = card.getBoundingClientRect(), b = target.getBoundingClientRect();
+                const dx = b.left + b.width / 2 - (a.left + a.width / 2), dy = b.top + b.height / 2 - (a.top + a.height / 2);
+                card.animate([{ transform: "none", opacity: 1 }, { transform: `translate(${dx}px, ${dy}px) scale(0.15)`, opacity: 0 }], { duration: 450, easing: "cubic-bezier(0.5, 0, 0.75, 0)", fill: "forwards" });
+            }
+            scene.classList.add("out");
+            setTimeout(() => {
+                scene.remove();
+                target?.classList.remove("ticket-glow");
+                void target?.offsetWidth;
+                target?.classList.add("ticket-glow");
+            }, 460);
+        };
+        const endTimer = setTimeout(finish, STAMP_AT + 2100);
+        scene.addEventListener("click", finish);
+    }
+
+    // Phones that support it (Android; iPhone browsers don't) buzz along.
+    const buzz = (pattern) => {
+        try {
+            navigator.vibrate?.(pattern);
+        } catch {}
+    };
+
+    function confetti() {
+        const colors = ["#5b5bf7", "#e5484d", "#f5a524", "#30a46c", "#3b5bdb", "#ff8fab"];
+        for (let i = 0; i < 48; i++) {
+            const c = el("i", "confetti");
+            c.style.background = colors[i % colors.length];
+            c.style.left = `${50 + (Math.random() - 0.5) * 20}vw`;
+            c.style.top = "45vh";
+            document.body.append(c);
+            const x = (Math.random() - 0.5) * innerWidth * 0.9, y = -(0.25 + Math.random() * 0.35) * innerHeight;
+            c.animate([
+                { transform: "translate(0, 0) rotate(0)", opacity: 1 },
+                { transform: `translate(${x}px, ${y}px) rotate(${Math.random() * 540}deg)`, opacity: 1, offset: 0.45 },
+                { transform: `translate(${x * 1.15}px, ${y + innerHeight * 0.6}px) rotate(${Math.random() * 900}deg)`, opacity: 0 },
+            ], { duration: 1600 + Math.random() * 600, easing: "cubic-bezier(0.2, 0.7, 0.4, 1)" }).onfinish = () => c.remove();
+        }
+    }
+
+    // Small synthesized sounds (only with 新訊息音效提醒 on): a two-tone siren, a stamp's thud,
+    // a gavel's knocks and a little fanfare.
+    function chime(kind) {
         if (!store.get("chatty.sound", true)) return;
         try {
-            // A two-tone siren: four wails over about a second.
             audioCtx ??= new AudioContext();
-            const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime;
-            o.type = "triangle";
-            for (let i = 0; i < 4; i++) {
-                o.frequency.setValueAtTime(960, t + i * 0.3);
-                o.frequency.linearRampToValueAtTime(640, t + i * 0.3 + 0.3);
-            }
-            g.gain.setValueAtTime(0.08, t);
-            g.gain.linearRampToValueAtTime(0, t + 1.2);
-            o.connect(g).connect(audioCtx.destination);
-            o.start(t);
-            o.stop(t + 1.2);
+            const t0 = audioCtx.currentTime;
+            const note = (type, from, to, start, length, volume) => {
+                const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+                o.type = type;
+                o.frequency.setValueAtTime(from, t0 + start);
+                o.frequency.exponentialRampToValueAtTime(to, t0 + start + length);
+                g.gain.setValueAtTime(volume, t0 + start);
+                g.gain.exponentialRampToValueAtTime(0.001, t0 + start + length);
+                o.connect(g).connect(audioCtx.destination);
+                o.start(t0 + start);
+                o.stop(t0 + start + length);
+            };
+            if (kind === "siren") for (let i = 0; i < 4; i++) note("triangle", i % 2 ? 660 : 940, i % 2 ? 640 : 920, i * 0.28, 0.27, 0.07);
+            if (kind === "thud") note("sine", 150, 45, 0, 0.22, 0.4);
+            if (kind === "knock") [0, 0.6, 1.2].forEach((at) => note("square", 220, 90, at, 0.08, 0.06));
+            if (kind === "fanfare") [523, 659, 784, 1047].forEach((f, i) => note("triangle", f, f, i * 0.09, 0.22, 0.08));
         } catch {}
     }
 
