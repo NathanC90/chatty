@@ -236,6 +236,13 @@
         <p class="copyright">© <span id="year">2026</span> Chatty. All rights reserved.</p>
     </section>
 
+    <section class="center" id="down" hidden>
+        <div class="logo">Chatty<span>.</span></div>
+        <p>暫時連不上聊天室</p>
+        <p class="sub" id="downReason"></p>
+        <p class="hint">你們的對話紀錄都還在。恢復後會自動重新連線，不用重新整理。</p>
+    </section>
+
     <section class="center" id="waiting" hidden>
         <div class="spinner" aria-hidden="true"></div>
         <p>正在尋找聊天對象…</p>
@@ -380,14 +387,17 @@
 
     // ---------- connection ----------
 
-    // Like WooTalk: when the connection drops, retry every 1.5 s and ask only for what was missed.
-    let ws, retryTimer, pongTimer;
+    // Like WooTalk: when the connection drops, reconnect and ask only for what was missed. Retries
+    // back off (1.5 s, 3 s, 6 s … 30 s) so a server that's down isn't hammered all night.
+    let ws, retryTimer, pongTimer, failures = 0, everConnected = false;
     function connect() {
         clearTimeout(retryTimer);
         clearTimeout(pongTimer);
         ws?.close();
         const sock = (ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?after=${lastId}`));
         sock.onopen = () => {
+            failures = 0;
+            everConnected = true;
             reported = null;
             setOnline(true);
             reportPresence();
@@ -399,8 +409,22 @@
         sock.onclose = () => {
             if (sock !== ws) return; // already replaced by a newer connection
             setOnline(false);
-            retryTimer = setTimeout(connect, 1500);
+            failures++;
+            if (!everConnected || failures >= 3) explainDown();
+            retryTimer = setTimeout(connect, Math.min(30000, 1500 * 2 ** Math.min(failures - 1, 5)) * (0.8 + Math.random() * 0.4));
         };
+    }
+
+    // Instead of a blank page: say that the server can't be reached and, if it says, why.
+    async function explainDown() {
+        if (convo && !$("chat").hidden) return; // in a chat, the "連線中…" banner already says it
+        show("down");
+        try {
+            const res = await fetch("/api/usage");
+            $("downReason").textContent = res.ok ? "網路不穩，正在重新連線…" : (await res.text()).slice(0, 200);
+        } catch {
+            $("downReason").textContent = "網路不穩，正在重新連線…";
+        }
     }
     // Phones often keep a dead connection that still looks open; a ping nobody answers exposes it.
     function checkAlive() {
@@ -554,6 +578,7 @@
     function show(name) {
         $("home").hidden = name !== "home";
         $("waiting").hidden = name !== "waiting";
+        $("down").hidden = name !== "down";
         $("chat").hidden = name !== "chat";
         if (name === "chat") {
             $("composer").hidden = partnerLeft;

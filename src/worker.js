@@ -90,6 +90,15 @@ export class Chat extends DurableObject {
             // reactions: JSON { uid: emoji }; ticket: JSON { by, reason, penalty, appeal }, or "null" once thrown out
             if (!columns.includes(name)) this.sql.exec(`ALTER TABLE messages ADD COLUMN ${name} ${type}`);
         }
+        // The free plan caps rows read per day. Without these, every message, typing signal and
+        // reconnect scanned the whole chat, so a long chat ran out of reads within a day; with
+        // them each lookup reads only the rows it needs.
+        this.sql.exec(`
+            CREATE INDEX IF NOT EXISTS messages_type ON messages (convo, type);
+            CREATE INDEX IF NOT EXISTS messages_cid ON messages (convo, cid);
+            CREATE INDEX IF NOT EXISTS messages_reacted ON messages (convo) WHERE reactions IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS messages_ticketed ON messages (convo) WHERE ticket IS NOT NULL;
+        `);
         // Answers the page's keep-alive pings without waking this object up.
         ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     }
@@ -140,12 +149,14 @@ export class Chat extends DurableObject {
         const u = this.user(uid);
         const c = this.convo(u.convo);
         if (!c) return { type: "state", state: u.waiting === null ? "idle" : "waiting", key: u.waiting ?? "", me: uid };
+        // One row past the page tells whether there's more, without counting the whole chat.
+        const latest = !after && this.rows("SELECT * FROM messages WHERE convo = ? ORDER BY id DESC LIMIT ?", c.id, PAGE + 1);
         const messages = after
             ? this.rows("SELECT * FROM messages WHERE convo = ? AND id > ? ORDER BY id", c.id, after)
-            : this.rows("SELECT * FROM messages WHERE convo = ? ORDER BY id DESC LIMIT ?", c.id, PAGE).reverse();
+            : latest.slice(0, PAGE).reverse();
         return {
             type: "state", state: "chat", me: uid, convo: c.id, key: c.key, reset: !after,
-            hasMore: !after && this.row("SELECT COUNT(*) AS n FROM messages WHERE convo = ?", c.id).n > PAGE,
+            hasMore: !after && latest.length > PAGE,
             messages: messages.map((m) => this.view(m, uid)),
             delivered: c.a === uid ? c.delivered_b : c.delivered_a,
             presence: this.presenceOf(this.partnerOf(c, uid)),
@@ -230,10 +241,15 @@ export class Chat extends DurableObject {
     }
 
     // Roughly what's stored: uploads plus a little per message.
+    // Kept in memory and recomputed only after files change: uploads, plus ~300 bytes per message
+    // (estimated from the newest id, which reads one row instead of every message).
     usage() {
-        const { used } = this.row(`SELECT (SELECT COALESCE(SUM(length(data)), 0) FROM files)
-            + (SELECT COALESCE(SUM(length(text)), 0) + COUNT(*) * 200 FROM messages) AS used`);
-        return { used, limit: this.limit };
+        if (!this.usageCache) {
+            const { files } = this.row("SELECT COALESCE(SUM(length(data)), 0) AS files FROM files");
+            const { n } = this.row("SELECT COALESCE(MAX(id), 0) AS n FROM messages");
+            this.usageCache = { used: files + n * 300, limit: this.limit };
+        }
+        return this.usageCache;
     }
 
     // Before an upload would bring storage near the limit, delete the oldest photos and voice clips.
@@ -244,6 +260,7 @@ export class Chat extends DurableObject {
         for (const f of this.rows("SELECT id, convo, length(data) AS size FROM files ORDER BY rowid")) {
             if (used + size <= this.limit * 0.8) break;
             this.sql.exec("DELETE FROM files WHERE id = ?", f.id);
+            this.usageCache = null;
             used -= f.size;
             const m = this.row("UPDATE messages SET file = NULL WHERE file = ? RETURNING *", f.id);
             const c = this.convo(f.convo);
@@ -256,6 +273,7 @@ export class Chat extends DurableObject {
         this.sql.exec("UPDATE users SET waiting = NULL, convo = NULL WHERE uid = ?", uid);
         if (c && this.partnerLeft(c)) {
             for (const table of ["messages", "files"]) this.sql.exec(`DELETE FROM ${table} WHERE convo = ?`, c.id);
+            this.usageCache = null;
             this.sql.exec("DELETE FROM convos WHERE id = ?", c.id);
         } else if (c) {
             this.addMessage(c, uid, { type: "leave" });
@@ -312,6 +330,7 @@ export class Chat extends DurableObject {
             if (this.usage().used + data.byteLength > this.limit) return empty(507);
             const file = hex();
             this.sql.exec("INSERT INTO files (id, convo, mime, data) VALUES (?, ?, ?, ?)", file, c.id, type, data);
+            this.usageCache = null;
             this.addMessage(c, uid, {
                 type: type.startsWith("image/") ? "image" : "audio",
                 file, cid, duration: Math.min(Number(url.searchParams.get("duration")) || 0, 600), reply: url.searchParams.get("reply"),
@@ -371,6 +390,7 @@ export class Chat extends DurableObject {
             const m = this.row("SELECT * FROM messages WHERE id = ? AND convo = ? AND sender = ? AND type NOT IN ('leave', 'unsent')", Number(body.id) || 0, c.id, uid);
             if (!m) return empty(400);
             if (m.file) this.sql.exec("DELETE FROM files WHERE id = ?", m.file);
+            this.usageCache = null;
             this.broadcast(c, this.row("UPDATE messages SET type = 'unsent', text = NULL, file = NULL, reactions = NULL, ticket = NULL WHERE id = ? RETURNING *", m.id));
         } else if (path === "/api/react") {
             // One reaction per person per message; an empty emoji removes yours.
