@@ -1286,6 +1286,15 @@
         }
     };
 
+    // Every pop-up closes, as if cancelled, on a tap outside its box (the image viewer has its own rule).
+    for (const d of document.querySelectorAll("dialog:not(.viewer)")) {
+        d.addEventListener("click", (e) => {
+            const r = d.getBoundingClientRect();
+            const outside = e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+            if (e.target === d && outside) d.close("cancel");
+        });
+    }
+
     connect();
 </script>
 </body>
