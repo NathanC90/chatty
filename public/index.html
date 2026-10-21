@@ -70,6 +70,7 @@
     .leave-btn:hover { background: var(--bg); }
 
     .banner { padding: 6px; text-align: center; font-size: 0.85rem; background: var(--them); color: var(--muted); }
+    .banner button { margin-left: 6px; color: var(--accent); font-weight: 600; }
     #log { flex: 1; overflow-y: auto; padding: 16px 12px; display: flex; flex-direction: column; gap: 2px; overscroll-behavior: contain; }
     .row { display: flex; flex-direction: column; max-width: 78%; margin-top: 6px; }
     .row.me { align-self: flex-end; align-items: flex-end; }
@@ -261,7 +262,7 @@
             <button class="icon" id="menuBtn" aria-label="設定"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
         </header>
         <div class="banner" id="offline" hidden>連線中…訊息會在恢復連線後送出</div>
-        <div class="banner" id="storageWarn" hidden>儲存空間快滿了：之後會自動刪除最舊的照片和語音（文字和表情不受影響）</div>
+        <div class="banner" id="storageWarn" hidden><span id="storageWarnText"></span><button type="button" id="rematchBtn">重新配對</button></div>
         <div id="log" aria-live="polite"></div>
         <div id="typing"></div>
         <div class="replybar" id="replybar" hidden>
@@ -366,7 +367,7 @@
         <h2>設定</h2>
         <label class="menu-item">新訊息音效提醒 <input type="checkbox" id="soundToggle"></label>
         <div class="menu-item" style="flex-wrap: wrap">儲存空間 <span class="sub" id="usageText">…</span><div class="meter"><i id="usageBar"></i></div></div>
-        <p style="font-size: 0.8rem">快滿時會自動刪除最舊的照片和語音，文字和表情都會保留。</p>
+        <p style="font-size: 0.8rem">剩不到 20% 時會提醒你們重新配對；到 90% 時會先自動刪除最舊的照片和語音，文字和表情都會保留。</p>
         <button type="button" class="menu-item" id="copyResume">在其他裝置繼續這段對話 <span>複製連結</span></button>
         <p style="font-size: 0.8rem">拿到這個連結的人就能以你的身分聊天，只給你自己用。</p>
         <div class="actions"><button class="primary" value="close">完成</button></div>
@@ -1371,6 +1372,7 @@
         $("leaveDialog").showModal();
     }
     $("leaveBtn").onclick = confirmLeave;
+    $("rematchBtn").onclick = confirmLeave;
     $("newChat").onclick = confirmLeave;
     $("leaveDialog").onclose = () => {
         if ($("leaveDialog").returnValue === "leave") post("/api/leave");
@@ -1427,7 +1429,9 @@
             const pct = Math.min(100, (used / limit) * 100);
             $("usageText").textContent = `約 ${fmt(used)}／${fmt(limit)}（${Math.round(pct)}%）`;
             $("usageBar").style.width = `${pct}%`;
-            $("storageWarn").hidden = pct < 70; // auto-deleting starts at 90%
+            // With 20% or less left, suggest starting a fresh chat (auto-deleting old photos starts at 90%).
+            $("storageWarn").hidden = pct < 80;
+            $("storageWarnText").textContent = `儲存空間只剩 ${Math.max(0, Math.round(100 - pct))}%。建議兩人都按「離開」後用同一個密語重新配對，開始新的對話（目前的對話紀錄會刪除）。`;
         } catch {}
     }
 

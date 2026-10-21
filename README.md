@@ -50,7 +50,7 @@ On the free plan, going over a limit makes requests fail until the daily reset (
 
 The database also has a daily cap on rows read (about 5 million). Every lookup uses an index, so an action reads a handful of rows however long the chat gets: sending a message reads about 10, opening the chat about 110. (Before that fix, each action re-read the whole chat and a long chat hit the cap within a day.) If a limit is ever hit, the page says so instead of going blank and retries more and more slowly, up to every 30 seconds, until the reset.
 
-Storage is the one limit you could reach. Cloudflare's docs mention 5 GB per account but also 1 GB per Durable Object on the free plan, and Chatty keeps everything in one, so it assumes 1 GB: roughly 3,000–5,000 photos. 設定 shows how much is used, and a notice appears at 70%. From 90%, each new upload first deletes the oldest photos and voice clips (down to 80%). Their messages stay and show 圖片已過期 / 語音已過期; text and reactions are never deleted.
+Storage is the one limit you could reach. Cloudflare's docs mention 5 GB per account but also 1 GB per Durable Object on the free plan, and Chatty keeps everything in one, so it assumes 1 GB: roughly 3,000–5,000 photos. 設定 shows how much is used. With 20% or less left, a banner suggests re-pairing (both press 離開, then meet again with the same 密語; the current chat is deleted), with a 重新配對 button that opens the usual leave confirmation. From 90%, each new upload first deletes the oldest photos and voice clips (down to 80%). Their messages stay and show 圖片已過期 / 語音已過期; text and reactions are never deleted.
 
 ## Developing
 
