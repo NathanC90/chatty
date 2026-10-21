@@ -430,10 +430,9 @@
             const res = await fetch("/api/usage");
             const text = res.ok ? "" : await res.text();
             if (/exceeded|free tier|limit/i.test(text)) {
-                // Cloudflare's free daily allowances reset at midnight UTC: say when that is here.
-                const now = new Date(), reset = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
-                const at = reset.toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false });
-                reason = `今天的免費使用量用完了，${reset.getDate() === now.getDate() ? "今天" : "明天"} ${at} 會自動恢復。`;
+                // Cloudflare's free daily allowances reset at midnight UTC: say what time that is here.
+                const at = new Date(Date.UTC(2000, 0, 1)).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false });
+                reason = `Cloudflare 的免費使用量暫時用完了。使用量每天 ${at} 重置，重置後會自動恢復連線。`;
             } else if (res.status === 401) {
                 reason = "這個瀏覽器的登入資料不見了。如果有存「在其他裝置繼續這段對話」的連結，打開它就能回到對話。";
             } else if (res.status >= 500) {
