@@ -94,6 +94,17 @@ try {
     assert.deepEqual(await a.next(), { type: "delivered", id: got.msg.id });
     assert.equal((await a.post("/api/send", { cid: "c2", text: "   " })).status, 400);
 
+    // Names: either person sets what they call the other and what they're called; both see it their way.
+    assert.deepEqual([matched.partnerName, matched.myName], [null, null]);
+    await a.post("/api/names", { partner: "崇德弟", me: "臺北叔" });
+    assert.deepEqual(await a.next(), { type: "names", partnerName: "崇德弟", myName: "臺北叔" });
+    assert.deepEqual(await b.next(), { type: "names", partnerName: "臺北叔", myName: "崇德弟" });
+    await b.post("/api/names", { me: "  " + "崇".repeat(20) + "  " }); // trimmed, cut to 12; a's name for b untouched
+    assert.equal((await a.next()).partnerName, "崇".repeat(12));
+    assert.equal((await b.next()).partnerName, "臺北叔");
+    await b.post("/api/names", { me: "崇德弟" });
+    await a.next(), await b.next();
+
     // Reactions: one per person per message, from a fixed set; both sides see who reacted with what.
     await b.post("/api/react", { id: got.msg.id, emoji: "❤️" });
     assert.deepEqual((await a.next()).msg.reactions, { mine: null, theirs: "❤️" });
@@ -249,6 +260,7 @@ try {
     assert.deepEqual(resumed.reactions[got.msg.id], { mine: "👍", theirs: null }); // the removal catches up too
     assert.deepEqual(resumed.unsent, [reply.id, u1.msg.id]); // and so do unsent messages
     assert.deepEqual(resumed.tickets[got.msg.id], verdict.ticket); // and tickets, even thrown-out ones
+    assert.deepEqual([resumed.partnerName, resumed.myName], ["崇德弟", "臺北叔"]); // names are kept
     await b.listen();
     const reload = await b.next();
     assert.deepEqual(reload.messages.map((m) => m.text ?? m.type), ["hello", "unsent", "x", ...Array.from({ length: 9 }, (_, i) => `joke ${i}`), "image", "image", "image", "image", "unsent", "you there?"]);

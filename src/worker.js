@@ -85,6 +85,11 @@ export class Chat extends DurableObject {
             CREATE TABLE IF NOT EXISTS reports (time INTEGER, by TEXT, reasons TEXT, transcript TEXT);
         `);
         // Columns added after launch: existing databases get them, their messages are kept.
+        // name_a / name_b: what a and b are called in this chat (shown to the other), null = 陌生人.
+        const convoColumns = this.sql.exec("SELECT * FROM convos LIMIT 0").columnNames;
+        for (const name of ["name_a", "name_b"]) {
+            if (!convoColumns.includes(name)) this.sql.exec(`ALTER TABLE convos ADD COLUMN ${name} TEXT`);
+        }
         const columns = this.sql.exec("SELECT * FROM messages LIMIT 0").columnNames;
         for (const [name, type] of [["reactions", "TEXT"], ["reply_to", "INTEGER"], ["ticket", "TEXT"]]) {
             // reactions: JSON { uid: emoji }; ticket: JSON { by, reason, penalty, appeal }, or "null" once thrown out
@@ -161,6 +166,7 @@ export class Chat extends DurableObject {
             delivered: c.a === uid ? c.delivered_b : c.delivered_a,
             presence: this.presenceOf(this.partnerOf(c, uid)),
             partnerLeft: this.partnerLeft(c),
+            ...this.namesFor(c, uid),
             // Every reacted message, so reactions changed on older messages while offline catch up too.
             reactions: Object.fromEntries(
                 this.rows("SELECT * FROM messages WHERE convo = ? AND reactions IS NOT NULL", c.id).map((m) => [m.id, this.reactionsOf(m, uid)]),
@@ -216,6 +222,9 @@ export class Chat extends DurableObject {
         }
         return PRESENCE[best];
     }
+
+    // The names in a chat as uid sees them: what the other person is called, and what uid is called.
+    namesFor = (c, uid) => (c.a === uid ? { partnerName: c.name_b, myName: c.name_a } : { partnerName: c.name_a, myName: c.name_b });
 
     // Tells the other person in uid's chat uid's current status. Always sent, never deduplicated:
     // the other page may have reconnected and seen a different status in its snapshot since.
@@ -401,6 +410,16 @@ export class Chat extends DurableObject {
             if (emoji) r[uid] = emoji;
             else delete r[uid];
             this.broadcast(c, this.row("UPDATE messages SET reactions = ? WHERE id = ? RETURNING *", JSON.stringify(r), m.id));
+        } else if (path === "/api/names") {
+            // Either person can name both: "partner" is what they call the other, "me" what they're called.
+            // An empty name goes back to 陌生人; up to 12 characters.
+            const clean = (v) => (typeof v === "string" ? v.trim().slice(0, 12) || null : undefined);
+            const [mine, theirs] = c.a === uid ? ["name_a", "name_b"] : ["name_b", "name_a"];
+            for (const [col, value] of [[theirs, clean(body.partner)], [mine, clean(body.me)]]) {
+                if (value !== undefined) this.sql.exec(`UPDATE convos SET ${col} = ? WHERE id = ?`, value, c.id);
+            }
+            const updated = this.convo(c.id);
+            for (const u of [c.a, c.b]) this.emit(u, { type: "names", ...this.namesFor(updated, u) });
         } else if (path === "/api/typing") this.emit(this.partnerOf(c, uid), { type: "typing" });
         else if (path === "/api/delivered") {
             const id = Number(body.id) || 0;

@@ -208,6 +208,8 @@
     dialog h2 { font-size: 1.1rem; margin-bottom: 8px; }
     dialog p { color: var(--muted); margin-bottom: 12px; }
     dialog label { display: flex; gap: 10px; align-items: center; padding: 8px 0; }
+    .names { display: grid; gap: 4px; margin-bottom: 8px; }
+    .names label { flex-direction: column; align-items: stretch; gap: 6px; padding: 4px 0; color: var(--muted); font-size: 0.85rem; }
     dialog input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
     .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
     .danger { padding: 10px 16px; border-radius: 12px; background: var(--danger); color: #fff; font-weight: 600; }
@@ -258,7 +260,7 @@
     <section id="chat" hidden style="display: contents">
         <header class="top" id="top">
             <button class="leave-btn" id="leaveBtn">離開</button>
-            <div class="who"><b>陌生人</b><small><i class="dot" id="dot"></i><span id="status">連線中…</span></small></div>
+            <div class="who"><b id="partnerTitle">陌生人</b><small><i class="dot" id="dot"></i><span id="status">連線中…</span></small></div>
             <button class="icon" id="menuBtn" aria-label="設定"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
         </header>
         <div class="banner" id="offline" hidden>連線中…訊息會在恢復連線後送出</div>
@@ -284,7 +286,7 @@
             </div>
         </form>
         <div class="ended" id="ended" hidden>
-            <span>對方已離開</span>
+            <span id="endedText">對方已離開</span>
             <button class="ghost" id="reportBtn2">回報</button>
             <button class="primary" id="newChat">離開並找新對象</button>
         </div>
@@ -365,6 +367,11 @@
 <dialog id="menuDialog">
     <form method="dialog">
         <h2>設定</h2>
+        <div class="names" id="namesBox" hidden>
+            <label>你看到對方的名字<input class="field" id="partnerNameInput" maxlength="12" placeholder="陌生人" autocomplete="off"></label>
+            <label>對方看到你的名字<input class="field" id="myNameInput" maxlength="12" placeholder="陌生人" autocomplete="off"></label>
+            <button type="button" class="primary" id="saveNames">儲存名字</button>
+        </div>
         <label class="menu-item">新訊息音效提醒 <input type="checkbox" id="soundToggle"></label>
         <div class="menu-item" style="flex-wrap: wrap">儲存空間 <span class="sub" id="usageText">…</span><div class="meter"><i id="usageBar"></i></div></div>
         <p style="font-size: 0.8rem">剩不到 20% 時會提醒你們重新配對；到 90% 時會先自動刪除最舊的照片和語音，文字和表情都會保留。</p>
@@ -506,6 +513,7 @@
             delivered = d.delivered;
             partnerLeft = d.partnerLeft;
             partnerPresence = d.presence;
+            names = { partner: d.partnerName, me: d.myName };
             // Reactions changed on messages already on screen (e.g. while this page was offline).
             for (const m of msgs) m.reactions = d.reactions?.[m.id] ?? m.reactions;
             for (const m of msgs) if (d.unsent?.includes(m.id)) Object.assign(m, { type: "unsent", text: undefined, url: undefined, reactions: null });
@@ -529,9 +537,12 @@
             merge([m]);
             if (old) policeNews(old, m);
         } else if (d.type === "typing" && convo) {
-            $("typing").textContent = "對方正在輸入…";
+            $("typing").textContent = `${partnerLabel()}正在輸入…`;
             clearTimeout(typingTimer);
             typingTimer = setTimeout(() => ($("typing").textContent = ""), 6000);
+        } else if (d.type === "names") {
+            names = { partner: d.partnerName, me: d.myName };
+            render();
         } else if (d.type === "presence") {
             partnerPresence = d.state;
             updateStatus();
@@ -745,13 +756,18 @@
         else log.scrollTop = log.scrollHeight - fromBottom; // keep position when older messages are added
         if (convo) show("chat");
         if (partnerLeft) cancelReply();
+        $("partnerTitle").textContent = names.partner || "陌生人";
+        $("endedText").textContent = `${partnerLabel()}已離開`;
         updateStatus();
     }
 
     // ---------- replies & unsending ----------
 
     let replyTo = null;
-    const who = (m) => (m.mine ? "你" : "對方");
+    // What each person calls the other in this chat (設定 → 名字); unset means 陌生人 / 對方.
+    let names = { partner: null, me: null };
+    const partnerLabel = () => names.partner || "對方";
+    const who = (m) => (m.mine ? "你" : partnerLabel());
     function snippet(m) {
         if (!m || m.type === "unsent") return "訊息已收回";
         if (m.type === "image") return "📷 圖片";
@@ -1080,7 +1096,7 @@
         if (!list.length) return null;
         const chip = el("button", "reacts", list[0] === list[1] ? `${list[0]} 2` : list.join(" "));
         chip.type = "button";
-        chip.title = [theirs && `對方 ${theirs}`, mine && `你 ${mine}`].filter(Boolean).join("、");
+        chip.title = [theirs && `${partnerLabel()} ${theirs}`, mine && `你 ${mine}`].filter(Boolean).join("、");
         chip.onclick = () => openPicker(m.id, bubble);
         return chip;
     }
@@ -1366,7 +1382,7 @@
     // Leaving always asks first: one tap on 離開對話 to confirm.
     function confirmLeave() {
         $("leaveText").textContent = partnerLeft
-            ? "對方已經離開了，你離開後這段對話會被永久刪除，無法再找回。"
+            ? `${partnerLabel()}已經離開了，你離開後這段對話會被永久刪除，無法再找回。`
             : "離開後這段對話就會結束，無法再找回。";
         $("leaveDialog").returnValue = ""; // else Esc would repeat the previous choice
         $("leaveDialog").showModal();
@@ -1437,8 +1453,15 @@
 
     $("menuBtn").onclick = () => {
         refreshUsage();
+        $("namesBox").hidden = !convo || partnerLeft;
+        $("partnerNameInput").value = names.partner || "";
+        $("myNameInput").value = names.me || "";
         $("soundToggle").checked = store.get("chatty.sound", true);
         $("menuDialog").showModal();
+    };
+    $("saveNames").onclick = async () => {
+        const res = await post("/api/names", { partner: $("partnerNameInput").value, me: $("myNameInput").value }).catch(() => null);
+        toast(res?.ok ? "名字已更新 ✓" : "儲存失敗，請稍後再試");
     };
     $("soundToggle").onchange = () => store.set("chatty.sound", $("soundToggle").checked);
     $("copyResume").onclick = async () => {
