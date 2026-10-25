@@ -94,6 +94,16 @@
     }
     .reacts { position: relative; margin: -6px 8px 0; padding: 1px 7px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 0.85rem; line-height: 1.5; box-shadow: 0 1px 3px rgb(0 0 0 / 0.12); }
     .expired { font-style: italic; opacity: 0.75; }
+    /* View-once (閱後即焚) photos */
+    .bubble.once button { color: inherit; font-weight: 600; }
+    .bubble.once small { display: block; font-size: 0.75rem; opacity: 0.8; }
+    .photo-preview { display: block; max-width: 100%; max-height: 40vh; margin: 0 auto 14px; border-radius: 12px; }
+    .photo-choices { display: grid; gap: 8px; }
+    .once-viewer { position: fixed; inset: 0; z-index: 45; display: grid; place-items: center; background: #000; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: none; }
+    .once-viewer canvas { pointer-events: none; }
+    .once-count { position: fixed; top: max(16px, env(safe-area-inset-top)); right: 16px; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: rgb(0 0 0 / 0.6); color: #fff; font-weight: 700; }
+    .once-bar { position: fixed; top: 0; left: 0; width: 100%; height: 3px; background: #e5484d; transform-origin: left; animation: once-bar 3s linear forwards; }
+    @keyframes once-bar { to { transform: scaleX(0); } }
     .meter { width: 100%; height: 6px; margin-top: 8px; border-radius: 3px; background: var(--them); overflow: hidden; }
     .meter i { display: block; width: 0; height: 100%; background: var(--accent); }
     /* Image viewer: full screen over the chat */
@@ -339,6 +349,18 @@
     </form>
 </dialog>
 
+<dialog id="photoDialog">
+    <form method="dialog">
+        <h2>傳送照片</h2>
+        <img id="photoPreview" class="photo-preview" alt="">
+        <div class="photo-choices">
+            <button class="primary" value="normal">一般傳送</button>
+            <button class="danger" value="once">🔥 閱後即焚（只能看 3 秒）</button>
+            <button class="ghost" value="cancel">取消</button>
+        </div>
+    </form>
+</dialog>
+
 <dialog id="emojiDialog">
     <form method="dialog">
         <h2>選擇表情</h2>
@@ -516,6 +538,7 @@
             names = { partner: d.partnerName, me: d.myName };
             // Reactions changed on messages already on screen (e.g. while this page was offline).
             for (const m of msgs) m.reactions = d.reactions?.[m.id] ?? m.reactions;
+            for (const m of msgs) if (d.openedOnce?.includes(m.id)) m.opened = true;
             for (const m of msgs) if (d.unsent?.includes(m.id)) Object.assign(m, { type: "unsent", text: undefined, url: undefined, reactions: null });
             for (const m of msgs) if (d.tickets && m.id in d.tickets) m.ticket = d.tickets[m.id];
             show("chat");
@@ -577,7 +600,7 @@
         try {
             for (const p of pending.filter((p) => p.convo === convo)) {
                 const res = p.blob
-                    ? await post(`/api/upload?cid=${p.cid}&duration=${p.duration || 0}&reply=${p.reply || ""}`, p.blob, { "Content-Type": p.blob.type })
+                    ? await post(`/api/upload?cid=${p.cid}&duration=${p.duration || 0}&reply=${p.reply || ""}${p.once ? "&once=1" : ""}`, p.blob, { "Content-Type": p.blob.type })
                     : await post("/api/send", { cid: p.cid, text: p.text, reply: p.reply });
                 if (res.status === 507) alert("儲存空間已滿，這個檔案傳不出去");
                 if ((res.status >= 400 && res.status < 500) || res.status === 507) {
@@ -658,6 +681,19 @@
 
     function content(m) {
         const b = el("div", "bubble");
+        if (m.once) {
+            // View-once photo: never shown in the chat, not even to its sender.
+            b.classList.add("once");
+            if (m.mine || m.blob) b.append("🔥 閱後即焚照片", el("small", null, m.blob ? "" : m.opened ? "對方已看過" : "對方尚未開啟"));
+            else if (m.opened) b.append("🔥 照片已焚毀");
+            else {
+                const open = el("button", null, "🔥 點一下查看照片（3 秒）");
+                open.type = "button";
+                open.onclick = () => viewOnce(m);
+                b.append(open);
+            }
+            return b;
+        }
         const expiredLabel = m.type === "image" ? "圖片已過期" : "語音已過期";
         if ((m.type === "image" || m.type === "audio") && !m.url && !m.blob) {
             b.append(el("span", "expired", expiredLabel)); // removed to free up storage
@@ -770,6 +806,7 @@
     const who = (m) => (m.mine ? "你" : partnerLabel());
     function snippet(m) {
         if (!m || m.type === "unsent") return "訊息已收回";
+        if (m.once) return "🔥 閱後即焚照片";
         if (m.type === "image") return "📷 圖片";
         if (m.type === "audio") return `🎤 語音 ${clock(m.duration || 0)}`;
         return m.text;
@@ -1284,11 +1321,68 @@
         g.drawImage(img, 0, 0, canvas.width, canvas.height);
         return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.8));
     }
+    // Every photo asks first: send normally, or as view-once (閱後即焚).
+    let pickedPhoto = null;
     async function sendImage(file) {
         if (!file?.type.startsWith("image/") || !convo) return;
         const blob = await shrink(file).catch(() => file);
         if (!blob || blob.size > 1.9e6) return alert("圖片太大了");
-        queue({ type: "image", blob, local: URL.createObjectURL(blob) });
+        pickedPhoto = { blob, local: URL.createObjectURL(blob) };
+        $("photoPreview").src = pickedPhoto.local;
+        $("photoDialog").returnValue = "";
+        $("photoDialog").showModal();
+    }
+    $("photoDialog").onclose = () => {
+        const choice = $("photoDialog").returnValue, photo = pickedPhoto;
+        pickedPhoto = null;
+        $("photoPreview").removeAttribute("src");
+        if (choice === "normal") queue({ type: "image", ...photo });
+        else if (choice === "once") {
+            URL.revokeObjectURL(photo.local); // nothing keeps a viewable copy, not even the sender's page
+            queue({ type: "image", blob: photo.blob, once: true });
+        } else URL.revokeObjectURL(photo.local);
+    };
+
+    // ---------- view-once photos ----------
+    // Fetched once (the server deletes it as it's sent), drawn on a canvas so there's no long-press
+    // "save image", drag or download, shown for 3 seconds, and closed at once if the page loses focus.
+    // A web page can't block screenshots; this only makes keeping the photo hard.
+    async function viewOnce(m) {
+        const res = await post("/api/once", { id: m.id }).catch(() => null);
+        if (!res?.ok) return toast(res?.status === 410 ? "這張照片已經看過或過期了" : "無法開啟，請稍後再試");
+        let bitmap;
+        try {
+            bitmap = await createImageBitmap(await res.blob());
+        } catch {
+            return toast("無法開啟這張照片");
+        }
+        const viewer = el("div", "once-viewer"), canvas = el("canvas"), count = el("div", "once-count", "3");
+        const fit = Math.min(innerWidth / bitmap.width, innerHeight / bitmap.height), dpr = devicePixelRatio || 1;
+        canvas.style.width = `${Math.round(bitmap.width * fit)}px`;
+        canvas.style.height = `${Math.round(bitmap.height * fit)}px`;
+        canvas.width = Math.round(bitmap.width * fit * dpr);
+        canvas.height = Math.round(bitmap.height * fit * dpr);
+        canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        bitmap.close();
+        viewer.append(canvas, el("div", "once-bar"), count);
+        viewer.oncontextmenu = (e) => e.preventDefault();
+        document.body.append(viewer);
+        const started = Date.now();
+        const end = () => {
+            clearInterval(timer);
+            canvas.width = canvas.height = 0; // wipe the pixels, not just hide them
+            viewer.remove();
+            removeEventListener("blur", end);
+            document.removeEventListener("visibilitychange", end);
+        };
+        const timer = setInterval(() => {
+            const left = 3 - (Date.now() - started) / 1000;
+            count.textContent = Math.max(0, Math.ceil(left));
+            if (left <= 0) end();
+        }, 100);
+        addEventListener("blur", end);
+        document.addEventListener("visibilitychange", end);
+        viewer.onclick = end;
     }
     $("imageBtn").onclick = () => $("file").click();
     $("file").onchange = () => {

@@ -216,6 +216,18 @@ try {
     await both(1);
     assert.equal((await fetch(base + u1.msg.url, { headers: { cookie: b.cookie } })).status, 404);
 
+    // View-once photo: no URL for anyone; only the recipient can fetch it, exactly once, and then it's deleted.
+    assert.equal((await fetch(`${base}/api/upload?cid=o1&once=1`, { method: "POST", headers: { cookie: a.cookie, "content-type": "image/png" }, body: "secret" })).status, 204);
+    const [o1] = await both(1);
+    assert.deepEqual([o1.msg.once, o1.msg.opened, o1.msg.url], [true, false, undefined]);
+    const usedBefore = (await (await fetch(`${base}/api/usage`, { headers: { cookie: a.cookie } })).json()).used;
+    assert.equal((await a.post("/api/once", { id: o1.msg.id })).status, 410); // not the sender
+    assert.equal(await (await b.post("/api/once", { id: o1.msg.id })).text(), "secret");
+    assert.equal((await b.post("/api/once", { id: o1.msg.id })).status, 410); // only once
+    const [opened] = await both(1);
+    assert.deepEqual([opened.msg.id, opened.msg.opened, opened.msg.url], [o1.msg.id, true, undefined]);
+    assert.equal((await (await fetch(`${base}/api/usage`, { headers: { cookie: a.cookie } })).json()).used, usedBefore - "secret".length);
+
     // Keep-alive pings get answered.
     a.send("ping");
     assert.equal((await a.next()).type, "pong");
@@ -246,7 +258,7 @@ try {
     await presenceBecomes(a, "online");
 
     // Server goes down. b keeps writing; the message is only accepted once it's back.
-    const lastSeenByA = u1.msg.id;
+    const lastSeenByA = o1.msg.id;
     a.close(); b.close();
     await stopServer();
     await assert.rejects(b.post("/api/send", { cid: "c3", text: "you there?" }));
@@ -262,9 +274,10 @@ try {
     assert.deepEqual(resumed.unsent, [reply.id, u1.msg.id]); // and so do unsent messages
     assert.deepEqual(resumed.tickets[got.msg.id], verdict.ticket); // and tickets, even thrown-out ones
     assert.deepEqual([resumed.partnerName, resumed.myName], ["小明", "小華"]); // names are kept
+    assert.deepEqual(resumed.openedOnce, [o1.msg.id]); // and opened view-once photos
     await b.listen();
     const reload = await b.next();
-    assert.deepEqual(reload.messages.map((m) => m.text ?? m.type), ["hello", "unsent", "x", ...Array.from({ length: 9 }, (_, i) => `joke ${i}`), "image", "image", "image", "image", "unsent", "you there?"]);
+    assert.deepEqual(reload.messages.map((m) => m.text ?? m.type), ["hello", "unsent", "x", ...Array.from({ length: 9 }, (_, i) => `joke ${i}`), "image", "image", "image", "image", "unsent", "image", "you there?"]);
     assert.equal(reload.delivered, 0); // a hasn't confirmed b's message yet
 
     // Same identity in another browser via the resume link, but only after confirming on Chatty's own page:

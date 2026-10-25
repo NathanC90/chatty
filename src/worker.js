@@ -122,7 +122,8 @@ export class Chat extends DurableObject {
             if (!convoColumns.includes(name)) this.sql.exec(`ALTER TABLE convos ADD COLUMN ${name} TEXT`);
         }
         const columns = this.sql.exec("SELECT * FROM messages LIMIT 0").columnNames;
-        for (const [name, type] of [["reactions", "TEXT"], ["reply_to", "INTEGER"], ["ticket", "TEXT"]]) {
+        for (const [name, type] of [["reactions", "TEXT"], ["reply_to", "INTEGER"], ["ticket", "TEXT"], ["once", "INTEGER"], ["opened", "INTEGER"]]) {
+            // once / opened: a view-once (閱後即焚) photo, and whether the recipient has opened it
             // reactions: JSON { uid: emoji }; ticket: JSON { by, reason, penalty, appeal }, or "null" once thrown out
             if (!columns.includes(name)) this.sql.exec(`ALTER TABLE messages ADD COLUMN ${name} ${type}`);
         }
@@ -134,6 +135,7 @@ export class Chat extends DurableObject {
             CREATE INDEX IF NOT EXISTS messages_cid ON messages (convo, cid);
             CREATE INDEX IF NOT EXISTS messages_reacted ON messages (convo) WHERE reactions IS NOT NULL;
             CREATE INDEX IF NOT EXISTS messages_ticketed ON messages (convo) WHERE ticket IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS messages_once ON messages (convo) WHERE once = 1;
         `);
         // Answers the page's keep-alive pings without waking this object up.
         ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
@@ -172,7 +174,10 @@ export class Chat extends DurableObject {
 
     view = (m, uid) => ({
         id: m.id, type: m.type, text: m.text ?? undefined, cid: m.cid, time: m.time, duration: m.duration,
-        mobile: !!m.mobile, mine: m.sender === uid, url: m.file ? `/uploads/${m.convo}/${m.file}` : undefined,
+        mobile: !!m.mobile, mine: m.sender === uid,
+        // A view-once photo never gets a URL: the recipient fetches it once through /api/once.
+        url: m.file && !m.once ? `/uploads/${m.convo}/${m.file}` : undefined,
+        once: !!m.once || undefined, opened: m.once ? !!m.opened : undefined,
         reactions: this.reactionsOf(m, uid), replyTo: this.quoteOf(m.reply_to, uid), ticket: this.ticketOf(m, uid),
     });
 
@@ -204,6 +209,8 @@ export class Chat extends DurableObject {
             ),
             // Likewise every unsent message, so ones taken back while this page was offline disappear too.
             unsent: this.rows("SELECT id FROM messages WHERE convo = ? AND type = 'unsent'", c.id).map((m) => m.id),
+            // And view-once photos opened while this page was offline.
+            openedOnce: this.rows("SELECT id FROM messages WHERE convo = ? AND once = 1 AND opened = 1", c.id).map((m) => m.id),
             // And tickets, including ones thrown out on appeal (null) while this page was offline.
             tickets: Object.fromEntries(
                 this.rows("SELECT * FROM messages WHERE convo = ? AND ticket IS NOT NULL", c.id).map((m) => [m.id, this.ticketOf(m, uid)]),
@@ -213,9 +220,10 @@ export class Chat extends DurableObject {
 
     addMessage(c, uid, m) {
         const saved = this.row(
-            `INSERT INTO messages (convo, sender, type, text, file, cid, mobile, duration, time, reply_to)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+            `INSERT INTO messages (convo, sender, type, text, file, cid, mobile, duration, time, once, opened, reply_to)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
             c.id, uid, m.type, m.text ?? null, m.file ?? null, m.cid ?? null, m.mobile ? 1 : 0, m.duration ?? 0, Date.now(),
+            m.once ? 1 : null, m.once ? 0 : null,
             this.row("SELECT id FROM messages WHERE id = ? AND convo = ? AND type NOT IN ('leave', 'unsent')", Number(m.reply) || 0, c.id)?.id ?? null,
         );
         this.broadcast(c, saved);
@@ -362,7 +370,7 @@ export class Chat extends DurableObject {
 
         if (req.method !== "POST") return empty(404);
         const isDuplicate = (cid) => !!this.row("SELECT 1 FROM messages WHERE convo = ? AND sender = ? AND cid = ?", c.id, uid, cid);
-        if (["/api/send", "/api/upload", "/api/typing", "/api/react", "/api/unsend", "/api/ticket", "/api/appeal"].includes(path)) this.touch(uid);
+        if (["/api/send", "/api/upload", "/api/typing", "/api/react", "/api/unsend", "/api/ticket", "/api/appeal", "/api/once"].includes(path)) this.touch(uid);
 
         if (path === "/api/upload") {
             const type = (req.headers.get("Content-Type") || "").split(";")[0].trim();
@@ -379,6 +387,7 @@ export class Chat extends DurableObject {
             this.addMessage(c, uid, {
                 type: type.startsWith("image/") ? "image" : "audio",
                 file, cid, duration: Math.min(Number(url.searchParams.get("duration")) || 0, 600), reply: url.searchParams.get("reply"),
+                once: type.startsWith("image/") && url.searchParams.get("once") === "1",
             });
             return empty(204);
         }
@@ -448,6 +457,16 @@ export class Chat extends DurableObject {
             if (emoji) r[uid] = emoji;
             else delete r[uid];
             this.broadcast(c, this.row("UPDATE messages SET reactions = ? WHERE id = ? RETURNING *", JSON.stringify(r), m.id));
+        } else if (path === "/api/once") {
+            // A view-once photo, handed to its recipient exactly once: the file is deleted as it's sent.
+            const m = this.row("SELECT * FROM messages WHERE id = ? AND convo = ? AND once = 1 AND opened = 0 AND sender != ?", Number(body.id) || 0, c.id, uid);
+            const f = m?.file && this.row("SELECT mime, data FROM files WHERE id = ?", m.file);
+            if (!m) return empty(410);
+            this.sql.exec("DELETE FROM files WHERE id = ?", m.file);
+            this.usageCache = null;
+            this.broadcast(c, this.row("UPDATE messages SET opened = 1, file = NULL WHERE id = ? RETURNING *", m.id));
+            if (!f) return empty(410); // its file was already cleared to free space
+            return new Response(f.data, { headers: { "Content-Type": f.mime, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
         } else if (path === "/api/names") {
             // Either person can name both: "partner" is what they call the other, "me" what they're called.
             // An empty name goes back to 陌生人; up to 12 characters.
