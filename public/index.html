@@ -1362,7 +1362,23 @@
         canvas.style.height = `${Math.round(bitmap.height * fit)}px`;
         canvas.width = Math.round(bitmap.width * fit * dpr);
         canvas.height = Math.round(bitmap.height * fit * dpr);
-        canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        // Watermark: the viewer's name (as the sender calls them) and the time, tiled diagonally, so a screenshot carries both.
+        const mark = `${names.me || "陌生人"} · ${new Date().toLocaleString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}`;
+        const size = Math.max(14 * dpr, Math.min(canvas.width, canvas.height) / 20);
+        ctx.font = `600 ${size}px system-ui, sans-serif`;
+        ctx.fillStyle = "rgb(255 255 255 / 0.32)";
+        ctx.strokeStyle = "rgb(0 0 0 / 0.22)";
+        ctx.lineWidth = size / 14;
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.rotate(-Math.PI / 6);
+        const step = ctx.measureText(mark).width + size * 2, span = Math.hypot(canvas.width, canvas.height) / 2;
+        for (let y = -span, row = 0; y < span; y += size * 3.5, row++)
+            for (let x = -span - (row % 2) * step / 2; x < span; x += step) {
+                ctx.strokeText(mark, x, y);
+                ctx.fillText(mark, x, y);
+            }
         bitmap.close();
         viewer.append(canvas, el("div", "once-bar"), count);
         viewer.oncontextmenu = (e) => e.preventDefault();
