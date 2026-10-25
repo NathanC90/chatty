@@ -53,6 +53,15 @@ The database also has a daily cap on rows read (about 5 million). Every lookup u
 
 Storage is the one limit you could reach. Cloudflare's docs mention 5 GB per account but also 1 GB per Durable Object on the free plan, and Chatty keeps everything in one, so it assumes 1 GB: roughly 3,000–5,000 photos. 設定 shows how much is used. With 20% or less left, a banner suggests re-pairing (both press 離開, then meet again with the same 密語; the current chat is deleted), with a 重新配對 button that opens the usual leave confirmation. From 90%, each new upload first deletes the oldest photos and voice clips (down to 80%). Their messages stay and show 圖片已過期 / 語音已過期; text and reactions are never deleted.
 
+## Security
+
+- **No secrets in the code.** Chatty uses no API keys. Cloudflare deploys it with its own GitHub connection, so nothing needs to be stored in this repository.
+- **Your identity is a cookie** (HttpOnly, Secure, SameSite=Lax). The 在其他裝置繼續 link carries it, so treat that link like a password. Opening such a link asks for confirmation before switching, so nobody can log your browser out of your chat by sending you their link.
+- **Only Chatty's own page can act:** state-changing requests and the live connection from other sites are refused (checked with Sec-Fetch-Site / Origin).
+- **Pages send security headers:** a Content-Security-Policy (own code only, no framing), X-Frame-Options DENY, Referrer-Policy same-origin (a `/key/密語` address never leaks to other sites), and Permissions-Policy (microphone only).
+- **Optional lock.** By default anyone who finds the address can start a chat and use your free allowance. To allow only your own 密語: Cloudflare dashboard → Workers & Pages → chatty → Settings → Variables and Secrets → add a **Secret** named `ALLOWED_KEYS` with your 密語 (several can be separated by commas). Others then see 「這個聊天室只限受邀的人使用」. Existing chats are unaffected.
+- **Not end-to-end encrypted:** messages are encrypted in transit (HTTPS) and stored in your Cloudflare account, where Cloudflare could technically read them.
+
 ## Developing
 
 ```bash

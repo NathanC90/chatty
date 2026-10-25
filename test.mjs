@@ -22,7 +22,7 @@ const STALE_MS = 3000; // a socket silent this long counts as gone (3 minutes in
 
 async function startServer() {
     const bin = new URL("node_modules/.bin/wrangler", import.meta.url).pathname;
-    proc = spawn(bin, ["dev", "--ip", "127.0.0.1", "--port", PORT, "--persist-to", DATA_DIR, "--var", `STORAGE_LIMIT:${STORAGE_LIMIT}`, "--var", `STALE_MS:${STALE_MS}`], {
+    proc = spawn(bin, ["dev", "--ip", "127.0.0.1", "--port", PORT, "--persist-to", DATA_DIR, "--var", `STORAGE_LIMIT:${STORAGE_LIMIT}`, "--var", `STALE_MS:${STALE_MS}`, "--var", "ALLOWED_KEYS:秘密,another"], {
         cwd: new URL(".", import.meta.url).pathname,
         env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
         detached: true, // own process group, so stopping it also stops workerd
@@ -73,8 +73,9 @@ try {
     // 密語 matching: a and b share a secret word, the stranger without one is never paired with them.
     await a.post("/api/start", { key: "秘密" });
     assert.equal((await a.next()).state, "waiting");
-    await stranger.post("/api/start", { key: "" });
-    assert.equal((await stranger.next()).state, "waiting");
+    // The optional lock is on in this test (ALLOWED_KEYS): a stranger without the 密語 can't start.
+    const refused = await stranger.post("/api/start", { key: "" });
+    assert.deepEqual([refused.status, (await refused.text()).includes("受邀")], [403, true]);
     await b.post("/api/start", { key: "秘密" });
     const matched = await a.next();
     assert.equal(matched.state, "chat");
@@ -96,13 +97,13 @@ try {
 
     // Names: either person sets what they call the other and what they're called; both see it their way.
     assert.deepEqual([matched.partnerName, matched.myName], [null, null]);
-    await a.post("/api/names", { partner: "崇德弟", me: "臺北叔" });
-    assert.deepEqual(await a.next(), { type: "names", partnerName: "崇德弟", myName: "臺北叔" });
-    assert.deepEqual(await b.next(), { type: "names", partnerName: "臺北叔", myName: "崇德弟" });
-    await b.post("/api/names", { me: "  " + "崇".repeat(20) + "  " }); // trimmed, cut to 12; a's name for b untouched
-    assert.equal((await a.next()).partnerName, "崇".repeat(12));
-    assert.equal((await b.next()).partnerName, "臺北叔");
-    await b.post("/api/names", { me: "崇德弟" });
+    await a.post("/api/names", { partner: "小明", me: "小華" });
+    assert.deepEqual(await a.next(), { type: "names", partnerName: "小明", myName: "小華" });
+    assert.deepEqual(await b.next(), { type: "names", partnerName: "小華", myName: "小明" });
+    await b.post("/api/names", { me: "  " + "明".repeat(20) + "  " }); // trimmed, cut to 12; a's name for b untouched
+    assert.equal((await a.next()).partnerName, "明".repeat(12));
+    assert.equal((await b.next()).partnerName, "小華");
+    await b.post("/api/names", { me: "小明" });
     await a.next(), await b.next();
 
     // Reactions: one per person per message, from a fixed set; both sides see who reacted with what.
@@ -260,15 +261,34 @@ try {
     assert.deepEqual(resumed.reactions[got.msg.id], { mine: "👍", theirs: null }); // the removal catches up too
     assert.deepEqual(resumed.unsent, [reply.id, u1.msg.id]); // and so do unsent messages
     assert.deepEqual(resumed.tickets[got.msg.id], verdict.ticket); // and tickets, even thrown-out ones
-    assert.deepEqual([resumed.partnerName, resumed.myName], ["崇德弟", "臺北叔"]); // names are kept
+    assert.deepEqual([resumed.partnerName, resumed.myName], ["小明", "小華"]); // names are kept
     await b.listen();
     const reload = await b.next();
     assert.deepEqual(reload.messages.map((m) => m.text ?? m.type), ["hello", "unsent", "x", ...Array.from({ length: 9 }, (_, i) => `joke ${i}`), "image", "image", "image", "image", "unsent", "you there?"]);
     assert.equal(reload.delivered, 0); // a hasn't confirmed b's message yet
 
-    // Same identity in another browser via the resume link.
-    const res = await fetch(`${base}/resume/${resumed.me}`, { redirect: "manual" });
+    // Same identity in another browser via the resume link, but only after confirming on Chatty's own page:
+    // opening the link alone (or a form on another site) must not switch identities.
+    const page = await fetch(`${base}/resume/${resumed.me}`, { redirect: "manual" });
+    assert.deepEqual([page.status, page.headers.get("set-cookie")], [200, null]);
+    const forged = await fetch(`${base}/resume/${resumed.me}`, { method: "POST", redirect: "manual", headers: { origin: "https://evil.example" } });
+    assert.deepEqual([forged.status, forged.headers.get("set-cookie")], [403, null]);
+    const res = await fetch(`${base}/resume/${resumed.me}`, { method: "POST", redirect: "manual", headers: { origin: base } });
     assert.equal(res.headers.get("set-cookie").split(";")[0], a.cookie);
+
+    // Requests from other sites are refused, and pages carry the security headers.
+    const cross = await fetch(`${base}/api/send`, { method: "POST", headers: { cookie: a.cookie, origin: "https://evil.example" }, body: JSON.stringify({ cid: "z", text: "hi" }) });
+    assert.equal(cross.status, 403);
+    const home = await fetch(base);
+    assert.match(home.headers.get("content-security-policy"), /frame-ancestors 'none'/);
+    assert.deepEqual([home.headers.get("x-frame-options"), home.headers.get("referrer-policy")], ["DENY", "same-origin"]);
+    const crossSite = await fetch(`${base}/api/send`, { method: "POST", headers: { cookie: a.cookie, "sec-fetch-site": "cross-site" }, body: JSON.stringify({ cid: "z", text: "hi" }) });
+    assert.equal(crossSite.status, 403);
+    await assert.rejects(new Promise((resolve, reject) => {
+        const ws = new WebSocket(`${base.replace("http", "ws")}/ws`, { headers: { cookie: a.cookie, origin: "https://evil.example" } });
+        ws.onopen = () => resolve(ws.close());
+        ws.onerror = () => reject(new Error("refused"));
+    }));
 
     // History paging.
     assert.equal((await (await fetch(`${base}/api/history?before=${got.msg.id + 1}`, { headers: { cookie: a.cookie } })).json()).messages.length, 1);

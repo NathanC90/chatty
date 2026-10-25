@@ -46,18 +46,49 @@ const setCookie = (uid) => `uid=${uid}; Path=/; Max-Age=31536000; HttpOnly; Secu
 const empty = (status) => new Response(null, { status });
 const hex = () => [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("");
 
+// For pages: only Chatty's own code and connections, no framing by other sites (clickjacking),
+// no Referer to other sites (it could carry a /key/密語 address), and the microphone as the only device.
+const pageHeaders = (url) => ({
+    "Content-Security-Policy": `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' wss://${url.host}; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "same-origin", // ("no-referrer" would also hide our own origin from our own forms)
+    "Permissions-Policy": "camera=(), geolocation=(), microphone=(self)",
+});
+
+// The /resume/... confirmation page: switching identity drops this browser's current chat,
+// so it's never done by just opening a link (someone could send a link to their own identity).
+const resumePage = (url) => new Response(`<!doctype html><html lang="zh-Hant"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Chatty</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:360px;margin:15vh auto;padding:0 20px;text-align:center;color-scheme:light dark}
+button,a{display:block;width:100%;margin-top:10px;padding:12px;border:0;border-radius:12px;font:inherit;text-decoration:none;box-sizing:border-box}
+button{background:#5b5bf7;color:#fff}a{color:inherit}</style>
+<h2>在這個瀏覽器打開這段對話？</h2>
+<p>這會把這個瀏覽器切換成連結裡的身分。只打開你自己的「在其他裝置繼續」連結；這個瀏覽器原本的對話，之後要用它自己的連結才能回去。</p>
+<form method="post"><button>切換並打開對話</button></form><a href="/">取消</a></html>`, { headers: { "Content-Type": "text/html; charset=utf-8", ...pageHeaders(url) } });
+
 export default {
     async fetch(req, env) {
         const url = new URL(req.url);
         if (req.method === "GET" && (url.pathname === "/" || url.pathname.startsWith("/key/"))) {
             const page = await env.ASSETS.fetch(new Request(new URL("/", url)));
             const res = new Response(page.body, page);
+            for (const [k, v] of Object.entries(pageHeaders(url))) res.headers.set(k, v);
             if (!cookieUid(req)) res.headers.append("Set-Cookie", setCookie(crypto.randomUUID()));
             return res;
         }
-        // Carries your identity (and so your conversation) over to another browser or device.
+        // Anything that changes state, and the live connection, must come from Chatty's own page.
+        // Browsers say so with Sec-Fetch-Site (or, older ones, Origin); scripts and tests send neither.
+        const origin = req.headers.get("Origin"), site = req.headers.get("Sec-Fetch-Site");
+        const ownPage = site === "same-origin" || origin === url.origin;
+        if (!ownPage && (site || origin) && (req.method !== "GET" || url.pathname === "/ws")) return empty(403);
+        // Carries your identity (and so your conversation) over to another browser or device, after a confirmation.
         const resume = /^\/resume\/([0-9a-f-]{36})$/.exec(url.pathname);
-        if (resume) return new Response(null, { status: 302, headers: { "Set-Cookie": setCookie(resume[1]), Location: "/" } });
+        if (resume && req.method === "GET") return resumePage(url);
+        if (resume && req.method === "POST") {
+            if (!ownPage) return empty(403);
+            return new Response(null, { status: 303, headers: { "Set-Cookie": setCookie(resume[1]), Location: "/" } });
+        }
         if (!cookieUid(req)) return empty(401);
         try {
             return await env.CHAT.get(env.CHAT.idFromName("chatty")).fetch(req);
@@ -196,8 +227,12 @@ export class Chat extends DurableObject {
     }
 
     start(uid, key) {
+        key = String(key ?? "").trim().slice(0, 50);
+        // Optional lock: with ALLOWED_KEYS set (a Cloudflare secret, comma-separated), only those
+        // 密語 can start a chat, so strangers who find the site can't use it or its free allowance.
+        const allowed = (this.env.ALLOWED_KEYS || "").split(",").map((k) => k.trim()).filter(Boolean);
+        if (allowed.length && !allowed.includes(key) && !this.user(uid).convo) return false;
         if (!this.user(uid).convo) {
-            key = String(key ?? "").trim().slice(0, 50);
             const other = this.row("SELECT uid FROM users WHERE waiting = ? AND uid != ? ORDER BY rowid LIMIT 1", key, uid)?.uid;
             if (other) {
                 const id = hex();
@@ -209,6 +244,7 @@ export class Chat extends DurableObject {
             }
         }
         this.emit(uid, this.snapshot(uid));
+        return true;
     }
 
     // Someone's status across all their open tabs: the most present one wins.
@@ -356,7 +392,9 @@ export class Chat extends DurableObject {
             return empty(400);
         }
 
-        if (path === "/api/start") this.start(uid, body.key);
+        if (path === "/api/start") {
+            if (!this.start(uid, body.key)) return new Response("這個聊天室只限受邀的人使用，請確認密語是否正確。", { status: 403 });
+        }
         else if (path === "/api/leave") this.leave(uid);
         else if (path === "/api/report") {
             if (c) {

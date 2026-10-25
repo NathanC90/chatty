@@ -166,7 +166,7 @@
     }
     .shake { animation: shake 0.5s ease-in-out 2; }
     @keyframes shake { 0%, 100% { transform: none; } 20% { transform: translateX(-6px) rotate(-2deg); } 40% { transform: translateX(6px) rotate(2deg); } 60% { transform: translateX(-4px); } 80% { transform: translateX(4px); } }
-    .toast { position: fixed; z-index: 30; left: 50%; bottom: 96px; padding: 10px 18px; border-radius: 999px; background: var(--text); color: var(--surface); font-size: 0.9rem; white-space: nowrap; pointer-events: none; animation: toast 3s ease forwards; }
+    .toast { position: fixed; z-index: 30; left: 50%; bottom: 96px; padding: 10px 18px; border-radius: 999px; background: var(--text); color: var(--surface); font-size: 0.9rem; width: max-content; max-width: calc(100vw - 32px); text-align: center; pointer-events: none; animation: toast 3s ease forwards; }
     @keyframes toast { 0% { opacity: 0; transform: translate(-50%, 10px); } 10%, 85% { opacity: 1; transform: translate(-50%, 0); } 100% { opacity: 0; transform: translate(-50%, 0); } }
     .picker .acts button:hover { background: var(--bg); }
     .picker .acts .unsend { color: var(--danger); }
@@ -1237,7 +1237,9 @@
         const key = $("key").value.trim();
         store.set("chatty.key", key);
         audioCtx ??= new AudioContext(); // unlock sound on this user gesture
-        post("/api/start", { key });
+        post("/api/start", { key })
+            .then(async (res) => !res.ok && toast(res.status === 403 ? await res.text() : "暫時無法開始，請稍後再試"))
+            .catch(() => toast("網路不穩，請稍後再試"));
     };
     $("cancelWait").onclick = () => post("/api/leave");
 
